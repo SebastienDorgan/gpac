@@ -8,12 +8,12 @@ type Driver struct {
 	AccessData AccessData
 }
 
-func Create(auth AuthAPI) (Driver, error) {
+func Create(auth AuthAPI) (*Driver, error) {
 	access, err := auth.Authenticate()
-	if err {
+	if err != nil {
 		return nil, err
 	}
-	return Driver{AccessData: access}, nil
+	return &Driver{AccessData: access}, nil
 }
 
 func (Driver) CreateKeyPair(name string) (cloud.KeyPair, error) {

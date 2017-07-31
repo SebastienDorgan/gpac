@@ -47,7 +47,7 @@ type VolumeAttachment struct {
 	VM     VM
 }
 
-type tenant interface {
+type driver interface {
 	CreateKeyPair(name string) (KeyPair, error)
 	GetKeyPair(id string) (KeyPair, error)
 	ListKeyPairs() ([]KeyPair, error)

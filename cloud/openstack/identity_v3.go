@@ -1,12 +1,11 @@
 package openstack
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
-	"encoding/json"
 )
-
 
 type AuthAPIV3 struct {
 	URL               string
@@ -23,22 +22,22 @@ type AuthAPIV3 struct {
 	ExplicitlyUnScope bool
 }
 
-func fmtQualifier(id *string, name *string, domain* string) *string {
+func fmtQualifier(id *string, name *string, domain *string) *string {
 
-	if domain == nil{
+	if domain == nil {
 		if id != nil {
-			elt:= fmt.Sprintf(`{ "id": "%q" }`, id)
+			elt := fmt.Sprintf(`{ "id": "%s" }`, *id)
 			return &elt
 		} else if name != nil {
-			elt:= fmt.Sprintf(`{ "name": "%q" }`, name)
+			elt := fmt.Sprintf(`{ "name": "%s" }`, *name)
 			return &elt
 		}
-	}else{
+	} else {
 		if id != nil {
-			elt:= fmt.Sprintf(`{ "id": "%q", "domain": %q }`, id, domain)
+			elt := fmt.Sprintf(`{ "id": "%s", "domain": %s }`, *id, *domain)
 			return &elt
 		} else if name != nil {
-			elt:= fmt.Sprintf(`{ "name": "%q", "domain": %q }`, name, domain)
+			elt := fmt.Sprintf(`{ "name": "%s", "domain": %s }`, *name, *domain)
 			return &elt
 		}
 	}
@@ -46,35 +45,35 @@ func fmtQualifier(id *string, name *string, domain* string) *string {
 	return nil
 }
 
-func fmtUser(id *string, name *string, password *string, domain* string) string {
+func fmtUser(id *string, name *string, password *string, domain *string) string {
 
-	if domain == nil{
+	if domain == nil {
 		if id != nil {
-			return fmt.Sprintf(`{ "id": "%q", "password": %q }`, id, password)
+			return fmt.Sprintf(`{ "id": "%s", "password": "%s" }`, *id, *password)
 		} else if name != nil {
-			return fmt.Sprintf(`{ "name": "%q", "password": %q }`, name, password)
+			return fmt.Sprintf(`{ "name": "%s", "password": "%s" }`, *name, *password)
 		}
-	}else {
+	} else {
 		if id != nil {
-			return fmt.Sprintf(`{ "id": "%q", "password": %q, "domain": %q }` , id, password, domain)
+			return fmt.Sprintf(`{ "id": "%s", "password": "%s", "domain": %s }`, *id, *password, *domain)
 		} else if name != nil {
-			return fmt.Sprintf(`{ "name": "%q", "password": %q, "domain": %q }`, name, password, domain)
+			return fmt.Sprintf(`{ "name": "%s", "password": "%s", "domain": %s }`, *name, *password, *domain)
 		}
 	}
 	return "null"
 }
 
-func (auth AuthAPIV3) authRequestWithPassword() (string) {
+func (auth AuthAPIV3) authRequestWithPassword() string {
 	request := `
 	{
 		"auth": {
 			"identity": {
 				"methods": ["password"],
 				"password": {
-					"user": %q
+					"user": %s
 				}
 			}
-			%q
+			%s
 		}
 	}
 	`
@@ -87,17 +86,17 @@ func (auth AuthAPIV3) authRequestWithPassword() (string) {
 	return request
 }
 
-func (auth AuthAPIV3) authRequestWithToken() (string) {
+func (auth AuthAPIV3) authRequestWithToken() string {
 	request := `
 	{
 		"auth": {
 			"identity": {
 				"methods": ["token"],
 				"token": {
-					"id": "'%q'"
+					"id": "%s"
 				}
 			}
-			%q
+			%s
 		}
 	}
 	`
@@ -106,19 +105,19 @@ func (auth AuthAPIV3) authRequestWithToken() (string) {
 	request = fmt.Sprintf(request, auth.UserTokenId, scope)
 	return request
 }
-func (auth AuthAPIV3)fmtScope() string {
+func (auth AuthAPIV3) fmtScope() string {
 	scope := ""
 	projectDomain := fmtQualifier(auth.ProjectDomainId, auth.ProjectDomainName, nil)
-	project := fmtQualifier(auth.ProjectId, auth.ProjectDomainName, projectDomain)
+	project := fmtQualifier(auth.ProjectId, auth.ProjectName, projectDomain)
 	if project != nil {
 		scope = `
 			,
 			"scope": {
-				"project": %q
+				"project": %s
 			}
 			`
-		scope = fmt.Sprintf(scope, project)
-	}else if auth.ExplicitlyUnScope{
+		scope = fmt.Sprintf(scope, *project)
+	} else if auth.ExplicitlyUnScope {
 		scope = `
 			,
 			"scope": "unscoped"
@@ -127,20 +126,20 @@ func (auth AuthAPIV3)fmtScope() string {
 	return scope
 }
 
-func (auth AuthAPIV3) AuthRequest() (string) {
-	if auth.UserTokenId == nil{
+func (auth AuthAPIV3) AuthRequest() string {
+	if auth.UserTokenId == nil {
 		return auth.authRequestWithPassword()
-	}else{
-		return auth.authRequestWithToken();
+	} else {
+		return auth.authRequestWithToken()
 	}
 }
 
 type tokenObject map[string]interface{}
 type endPointObject map[string]string
 
-func (auth AuthAPIV3) Authenticate() (AccessData, error) {
+func (auth AuthAPIV3) Authenticate() (*AccessData, error) {
 	resp, err := http.Post(auth.URL, "application/json", strings.NewReader(auth.AuthRequest()))
-	if err {
+	if err != nil {
 		return nil, err
 	}
 	access := AccessData{}
@@ -149,25 +148,25 @@ func (auth AuthAPIV3) Authenticate() (AccessData, error) {
 	var body map[string]tokenObject
 	var bodyBuffer []byte
 	resp.Body.Read(bodyBuffer)
-	err = json.Unmarshal(bodyBuffer, body)
-	if err {
+	err = json.Unmarshal(bodyBuffer, &body)
+	if err != nil {
 		return nil, err
 	}
-	access.Catalog = readCatalog(body["token"])
+	access.Catalog = ReadCatalog(body["token"])
 
-	return access, nil
+	return &access, nil
 }
 
-func readCatalog(token tokenObject) Catalog {
+func ReadCatalog(token tokenObject) Catalog {
 	catalog := Catalog{}
 	c, contains := token["catalog"]
 	if !contains {
 		return catalog
 	}
-	servicesList := c.(([] map[string]interface{}))
+	servicesList := c.(([]map[string]interface{}))
 	for _, serviceDef := range servicesList {
 		name := serviceDef["name"].(string)
-		endpoints := serviceDef["endpoints"].([] endPointObject)
+		endpoints := serviceDef["endpoints"].([]endPointObject)
 		for _, endpoint := range endpoints {
 			if endpoint["interface"] == "public" {
 				catalog[name] = Service{
