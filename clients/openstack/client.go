@@ -15,6 +15,7 @@ import (
 	"github.com/rackspace/gophercloud/openstack"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/keypairs"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/secgroups"
+	"github.com/rackspace/gophercloud/openstack/compute/v2/servers"
 	"github.com/rackspace/gophercloud/openstack/imageservice/v2/images"
 	"github.com/rackspace/gophercloud/openstack/networking/v2/networks"
 	"github.com/rackspace/gophercloud/openstack/networking/v2/subnets"
@@ -622,7 +623,7 @@ func (client *Client) DeleteNetwork(id string) error {
 	return networks.Delete(client.neutron, id).ExtractErr()
 }
 
-func toGCIPversion(v api.IPVersion) int {
+func toGopherIPversion(v api.IPVersion) int {
 	if v == api.IPv4 {
 		return subnets.IPv4
 	} else if v == api.IPv6 {
@@ -652,7 +653,7 @@ func (client *Client) CreateSubnet(request api.SubnetRequets) (*api.Subnet, erro
 	opts := subnets.CreateOpts{
 		NetworkID:  request.NetworkID,
 		CIDR:       request.Mask,
-		IPVersion:  toGCIPversion(request.IPVersion),
+		IPVersion:  toGopherIPversion(request.IPVersion),
 		Name:       request.Name,
 		EnableDHCP: &dhcp,
 
@@ -732,13 +733,56 @@ func (client *Client) DeleteSubnet(id string) error {
 	return subnets.Delete(client.neutron, id).ExtractErr()
 }
 
+func toVMTemplate(flavor map[string]interface{}) api.VMTemplate {
+	return api.VMTemplate{}
+}
+
+func toVMState(status string) api.VMState {
+	return api.STARTING
+}
+
+func convertAdresses(addresses map[string]interface{}) map[api.IPVersion][]string {
+	return map[api.IPVersion][]string{
+		api.IPv4: []string{""},
+	}
+}
+
 //CreateVM creates a VM
-func (client *Client) CreateVM(request api.VMRequest) (api.VM, error) {
-	panic("Not implemented")
+func (client *Client) CreateVM(request api.VMRequest) (*api.VM, error) {
+	var nets []servers.Network
+	for _, n := range request.NetworkIDs {
+		nets = append(nets, servers.Network{UUID: n})
+	}
+	srvOpts := servers.CreateOpts{
+		Name:           request.Name,
+		SecurityGroups: []string{client.securityGroup.Name},
+		Networks:       nets,
+		FlavorRef:      request.TemplateID,
+		ImageRef:       request.ImageID,
+	}
+	server, err := servers.Create(client.nova, keypairs.CreateOptsExt{
+		CreateOptsBuilder: srvOpts,
+		KeyName:           request.KeyPairID,
+	}).Extract()
+	if err != nil {
+		return nil, err
+	}
+	adresses := convertAdresses(server.Addresses)
+	vm := api.VM{
+		ID:           server.ID,
+		Name:         server.Name,
+		PrivateIPsV4: adresses[api.IPv4],
+		PrivateIPsV6: adresses[api.IPv6],
+		AccessIPv4:   server.AccessIPv4,
+		AccessIPv6:   server.AccessIPv6,
+		Size:         toVMTemplate(server.Flavor),
+		State:        toVMState(server.Status),
+	}
+	return &vm, nil
 }
 
 //GetVM returns the VM identified by id
-func (client *Client) GetVM(id string) (api.VM, error) {
+func (client *Client) GetVM(id string) (*api.VM, error) {
 	panic("Not implemented")
 }
 

@@ -98,12 +98,14 @@ func (version IPVersion) String() string {
 
 //VM represents a virtual machine properties
 type VM struct {
-	ID         string
-	Name       string
-	PrivateIPs []string
-	PublicIP   string
-	Size       VMTemplate
-	State      VMState
+	ID           string
+	Name         string
+	PrivateIPsV4 []string
+	PrivateIPsV6 []string
+	AccessIPv4   string
+	AccessIPv6   string
+	Size         VMTemplate
+	State        VMState
 }
 
 //VMRequest represents requirements to create virtual machine properties
@@ -113,10 +115,12 @@ type VMRequest struct {
 	KeyPairID string
 	//NetworksIDs list of the network IDs the VM must be connected
 	NetworkIDs []string
-	//PublicIP a flg telling if the VM must have a public IP
+	//PublicIP a flg telling if the VM must have a public IP is
 	PublicIP bool
-	//TemplateID the ID of the template used to size the VM (see SelectTemplates)
-	TemplateID VMTemplate
+	//TemplateID the UUID of the template used to size the VM (see SelectTemplates)
+	TemplateID string
+	//ImageID  is the UUID of the image that contains the server's OS and initial state.
+	ImageID string
 }
 
 //Volume represents an block volume
@@ -217,9 +221,9 @@ type ClientAPI interface {
 	DeleteSubnet(id string) error
 
 	//CreateVM creates a VM that fulfils the request
-	CreateVM(request VMRequest) (VM, error)
+	CreateVM(request VMRequest) (*VM, error)
 	//GetVM returns the VM identified by id
-	GetVM(id string) (VM, error)
+	GetVM(id string) (*VM, error)
 	//ListVMs lists available VMs
 	ListVMs() ([]VM, error)
 	//DeleteVM deletes the VM identified by id
