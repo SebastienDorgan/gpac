@@ -8,9 +8,22 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/SebastienDorgan/gpac/clients"
+
+	"github.com/SebastienDorgan/gpac/clients/api/IPVersion"
+
+	"github.com/SebastienDorgan/gpac/clients/api/VMState"
+
+	"github.com/rackspace/gophercloud/openstack/blockstorage/v1/volumetypes"
+
+	"github.com/rackspace/gophercloud/openstack/blockstorage/v1/volumes"
+	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/startstop"
+
+	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/floatingip"
+
 	"github.com/rackspace/gophercloud/openstack/networking/v2/extensions/layer3/routers"
 
-	api "github.com/SebastienDorgan/gpac/clients"
+	"github.com/SebastienDorgan/gpac/clients/api"
 	gc "github.com/rackspace/gophercloud"
 	"github.com/rackspace/gophercloud/openstack"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/keypairs"
@@ -76,8 +89,21 @@ type AuthOptions struct {
 	//Name of the provider (external) network
 	ProviderNetwork string
 
-	//UseFloatingIP indicates if floating IP are used
+	//UseFloatingIP indicates if floating IP are used (optional)
 	UseFloatingIP bool
+
+	//FloatingIPPool name of the floating IP pool
+	//Necessary only if UseFloatingIP is true
+	FloatingIPPool string
+}
+
+func errorString(err error) string {
+	switch e := err.(type) {
+	default:
+		return e.Error()
+	case *gc.UnexpectedResponseCodeError:
+		return string(e.Body[:])
+	}
 }
 
 //AuthenticatedClient returns an authenticated client
@@ -171,7 +197,7 @@ func (client *Client) getProviderNetwork() (*networks.Network, error) {
 func (client *Client) createDefaultRouter() error {
 	pNet, err := client.getProviderNetwork()
 	if err != nil {
-		return fmt.Errorf("Error retriving Provider network %s: %s", client.Opts.ProviderNetwork, err.Error())
+		return fmt.Errorf("Error retriving Provider network %s: %s", client.Opts.ProviderNetwork, errorString(err))
 	}
 	//Create a router to connect external Provider network
 	gi := routers.GatewayInfo{
@@ -303,7 +329,7 @@ func (client *Client) initDefaultSecurityGroup() error {
 	}
 	opts := secgroups.CreateOpts{
 		Name:        defaultSecurityGroup,
-		Description: "Gpac default security group",
+		Description: "Default security group",
 	}
 
 	group, err := secgroups.Create(client.nova, opts).Extract()
@@ -383,10 +409,36 @@ func (client *Client) ListImages() ([]api.Image, error) {
 	})
 	if len(imgList) == 0 {
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("Error listing images: %s", errorString(err))
 		}
 	}
 	return imgList, nil
+}
+
+//GetImage returns the Image referenced by id
+func (client *Client) GetImage(id string) (*api.Image, error) {
+	img, err := images.Get(client.nova, id).Extract()
+	if err != nil {
+		return nil, fmt.Errorf("Error getting image: %s", errorString(err))
+	}
+	return &api.Image{ID: img.ID, Name: img.Name}, nil
+}
+
+//GetTemplate returns the Template referenced by id
+func (client *Client) GetTemplate(id string) (*api.VMTemplate, error) {
+	flv, err := flavors.Get(client.nova, id).Extract()
+	if err != nil {
+		return nil, fmt.Errorf("Error getting template: %s", errorString(err))
+	}
+	return &api.VMTemplate{
+		VMSize: api.VMSize{
+			Cores:    flv.VCPUs,
+			RAMSize:  float32(flv.RAM) / 1000.0,
+			DiskSize: flv.Disk,
+		},
+		ID:   flv.ID,
+		Name: flv.Name,
+	}, nil
 }
 
 //ListTemplates lists available VM templates
@@ -408,11 +460,13 @@ func (client *Client) ListTemplates() ([]api.VMTemplate, error) {
 
 		for _, flv := range flavorList {
 			flvList = append(flvList, api.VMTemplate{
-				ID:       flv.ID,
-				Name:     flv.Name,
-				Cores:    flv.VCPUs,
-				DiskSize: flv.Disk,
-				RAMSize:  float32(flv.RAM) / 1000.0,
+				VMSize: api.VMSize{
+					Cores:    flv.VCPUs,
+					RAMSize:  float32(flv.RAM) / 1000.0,
+					DiskSize: flv.Disk,
+				},
+				ID:   flv.ID,
+				Name: flv.Name,
 			})
 
 		}
@@ -449,11 +503,13 @@ func (client *Client) SelectTemplates(sizing api.SizingRequirements) ([]api.VMTe
 		for _, flv := range flavorList {
 			if flv.VCPUs >= sizing.MinCores {
 				flvList = append(flvList, api.VMTemplate{
-					ID:       flv.ID,
-					Name:     flv.Name,
-					Cores:    flv.VCPUs,
-					DiskSize: flv.Disk,
-					RAMSize:  float32(flv.RAM) / 1000.0,
+					VMSize: api.VMSize{
+						Cores:    flv.VCPUs,
+						RAMSize:  float32(flv.RAM) / 1000.0,
+						DiskSize: flv.Disk,
+					},
+					ID:   flv.ID,
+					Name: flv.Name,
 				})
 			}
 		}
@@ -550,7 +606,11 @@ func (client *Client) ListKeyPairs() ([]api.KeyPair, error) {
 
 //DeleteKeyPair deletes the key pair identified by id
 func (client *Client) DeleteKeyPair(id string) error {
-	return keypairs.Delete(client.nova, id).ExtractErr()
+	err := keypairs.Delete(client.nova, id).ExtractErr()
+	if err != nil {
+		return fmt.Errorf("Error deleting key pair: %s", errorString(err))
+	}
+	return nil
 }
 
 //CreateNetwork creates a network named name
@@ -578,7 +638,7 @@ func (client *Client) CreateNetwork(name string) (*api.Network, error) {
 func (client *Client) GetNetwork(id string) (*api.Network, error) {
 	network, err := networks.Get(client.neutron, id).Extract()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Error getting network: %s", errorString(err))
 	}
 	return &api.Network{
 		ID:      network.ID,
@@ -613,26 +673,30 @@ func (client *Client) ListNetworks() ([]api.Network, error) {
 		return true, nil
 	})
 	if len(netList) == 0 && err != nil {
-		return netList, err
+		return nil, fmt.Errorf("Error listing networks: %s", errorString(err))
 	}
 	return netList, nil
 }
 
 //DeleteNetwork deletes the network identified by id
 func (client *Client) DeleteNetwork(id string) error {
-	return networks.Delete(client.neutron, id).ExtractErr()
+	err := networks.Delete(client.neutron, id).ExtractErr()
+	if err != nil {
+		return fmt.Errorf("Error deleting network: %s", errorString(err))
+	}
+	return nil
 }
 
-func toGopherIPversion(v api.IPVersion) int {
-	if v == api.IPv4 {
+func toGopherIPversion(v IPVersion.Enum) int {
+	if v == IPVersion.IPv4 {
 		return subnets.IPv4
-	} else if v == api.IPv6 {
+	} else if v == IPVersion.IPv6 {
 		return subnets.IPv6
 	}
 	return -1
 }
 
-func fromGopherIPversion(v int) api.IPVersion {
+func fromGopherIPversion(v int) IPVersion.Enum {
 	if v == 4 {
 		return subnets.IPv4
 	} else if v == 6 {
@@ -662,14 +726,14 @@ func (client *Client) CreateSubnet(request api.SubnetRequets) (*api.Subnet, erro
 	// Execute the operation and get back a subnets.Subnet struct
 	subnet, err := subnets.Create(client.neutron, opts).Extract()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Error creating subnet: %s", errorString(err))
 	}
 	_, err = routers.AddInterface(client.neutron, client.router.ID, routers.InterfaceOpts{
 		SubnetID: subnet.ID,
 	}).Extract()
 	if err != nil {
 		client.DeleteSubnet(subnet.ID)
-		return nil, err
+		return nil, fmt.Errorf("Error creating subnet: %s", errorString(err))
 	}
 	return &api.Subnet{
 		ID:        subnet.ID,
@@ -685,7 +749,7 @@ func (client *Client) GetSubnet(id string) (*api.Subnet, error) {
 	// Execute the operation and get back a subnets.Subnet struct
 	subnet, err := subnets.Get(client.neutron, id).Extract()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Error getting subnet: %s", errorString(err))
 	}
 	return &api.Subnet{
 		ID:        subnet.ID,
@@ -705,7 +769,7 @@ func (client *Client) ListSubnets(netID string) ([]api.Subnet, error) {
 	pager.EachPage(func(page pagination.Page) (bool, error) {
 		list, err := subnets.ExtractSubnets(page)
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("Error listing subnets: %s", errorString(err))
 		}
 
 		for _, subnet := range list {
@@ -727,31 +791,91 @@ func (client *Client) DeleteSubnet(id string) error {
 	_, err := routers.RemoveInterface(client.neutron, client.router.ID, routers.InterfaceOpts{
 		SubnetID: id,
 	}).Extract()
-	if err != nil {
-		return err
+
+	err2 := subnets.Delete(client.neutron, id).ExtractErr()
+	if err != nil && err2 != nil {
+		return fmt.Errorf("Error deleting subnets: %s", errorString(err))
 	}
-	return subnets.Delete(client.neutron, id).ExtractErr()
-}
-
-func toVMTemplate(flavor map[string]interface{}) api.VMTemplate {
-	return api.VMTemplate{}
-}
-
-func toVMState(status string) api.VMState {
-	return api.STARTING
-}
-
-func convertAdresses(addresses map[string]interface{}) map[api.IPVersion][]string {
-	return map[api.IPVersion][]string{
-		api.IPv4: []string{""},
+	if err2 != nil {
+		return fmt.Errorf("Error deleting subnets: %s", errorString(err2))
 	}
+	return nil
+}
+
+func (client *Client) toVMSize(flavor map[string]interface{}) api.VMSize {
+	if i, ok := flavor["id"]; ok {
+		fid := i.(string)
+		tpl, _ := client.GetTemplate(fid)
+		return tpl.VMSize
+	}
+	if _, ok := flavor["vcpus"]; ok {
+		return api.VMSize{
+			Cores:    flavor["vcpus"].(int),
+			DiskSize: flavor["disk"].(int),
+			RAMSize:  flavor["ram"].(float32) / 1000.0,
+		}
+	}
+	return api.VMSize{}
+}
+
+func toVMState(status string) VMState.Enum {
+	switch status {
+	case "BUILD", "build", "BUILDING", "building":
+		return VMState.STARTING
+	case "ACTIVE", "active":
+		return VMState.STARTED
+	case "RESCUED", "rescued":
+		return VMState.STOPPING
+	case "STOPPED", "stopped", "SHUTOFF", "shutoff":
+		return VMState.STOPPED
+	default:
+		return VMState.ERROR
+	}
+}
+
+func (client *Client) convertAdresses(addresses map[string]interface{}) map[IPVersion.Enum][]string {
+	addrs := make(map[IPVersion.Enum][]string)
+	for n, obj := range addresses {
+		if n == client.Opts.ProviderNetwork {
+			break
+		}
+		for _, networkAddresses := range obj.([]interface{}) {
+			address := networkAddresses.(map[string]interface{})
+			version := address["version"].(float64)
+			fixedIP := address["addr"].(string)
+			switch version {
+			case 4:
+				addrs[IPVersion.IPv4] = append(addrs[IPVersion.IPv4], fixedIP)
+			case 6:
+				addrs[IPVersion.IPv6] = append(addrs[IPVersion.IPv4], fixedIP)
+			}
+		}
+	}
+	return addrs
+}
+
+func (client *Client) toVM(server *servers.Server) *api.VM {
+	adresses := client.convertAdresses(server.Addresses)
+	vm := api.VM{
+		ID:           server.ID,
+		Name:         server.Name,
+		PrivateIPsV4: adresses[IPVersion.IPv4],
+		PrivateIPsV6: adresses[IPVersion.IPv6],
+		AccessIPv4:   server.AccessIPv4,
+		AccessIPv6:   server.AccessIPv6,
+		Size:         client.toVMSize(server.Flavor),
+		State:        toVMState(server.Status),
+	}
+	return &vm
 }
 
 //CreateVM creates a VM
 func (client *Client) CreateVM(request api.VMRequest) (*api.VM, error) {
 	var nets []servers.Network
 	for _, n := range request.NetworkIDs {
-		nets = append(nets, servers.Network{UUID: n})
+		nets = append(nets, servers.Network{
+			UUID: n,
+		})
 	}
 	srvOpts := servers.CreateOpts{
 		Name:           request.Name,
@@ -765,58 +889,187 @@ func (client *Client) CreateVM(request api.VMRequest) (*api.VM, error) {
 		KeyName:           request.KeyPairID,
 	}).Extract()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
 	}
-	adresses := convertAdresses(server.Addresses)
-	vm := api.VM{
-		ID:           server.ID,
-		Name:         server.Name,
-		PrivateIPsV4: adresses[api.IPv4],
-		PrivateIPsV6: adresses[api.IPv6],
-		AccessIPv4:   server.AccessIPv4,
-		AccessIPv6:   server.AccessIPv6,
-		Size:         toVMTemplate(server.Flavor),
-		State:        toVMState(server.Status),
+	fmt.Println("Waiting VM")
+	vm, err := clients.WaitVMState(client, server.ID, VMState.STARTED, 120)
+	if err != nil {
+		return nil, fmt.Errorf("Timeout creating VM: %s", errorString(err))
 	}
-	return &vm, nil
+	if !client.Opts.UseFloatingIP || !request.PublicIP {
+		return vm, nil
+	}
+	fmt.Println("Creating floating IP")
+	ip, err := floatingip.Create(client.nova, floatingip.CreateOpts{
+		Pool: client.Opts.FloatingIPPool,
+	}).Extract()
+	if err != nil {
+		servers.Delete(client.nova, vm.ID)
+		return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
+	}
+	fmt.Println("AssociateInstance")
+	err = floatingip.AssociateInstance(client.nova, floatingip.AssociateOpts{
+		FloatingIP: ip.IP,
+		ServerID:   vm.ID,
+	}).ExtractErr()
+	if err != nil {
+		floatingip.Delete(client.nova, ip.ID)
+		servers.Delete(client.nova, vm.ID)
+		return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
+	}
+	fmt.Println("VM ready")
+	if IPVersion.IPv4.Is(ip.IP) {
+		vm.AccessIPv4 = ip.IP
+	} else if IPVersion.IPv6.Is(ip.IP) {
+		vm.AccessIPv6 = ip.IP
+	}
+	return vm, nil
+
 }
 
 //GetVM returns the VM identified by id
 func (client *Client) GetVM(id string) (*api.VM, error) {
-	panic("Not implemented")
+	server, err := servers.Get(client.nova, id).Extract()
+	if err != nil {
+		return nil, fmt.Errorf("Error getting VM: %s", errorString(err))
+	}
+	fmt.Println(server.Status)
+	return client.toVM(server), nil
 }
 
 //ListVMs lists available VMs
 func (client *Client) ListVMs() ([]api.VM, error) {
-	panic("Not implemented")
+	pager := servers.List(client.nova, servers.ListOpts{})
+	var vms []api.VM
+	err := pager.EachPage(func(page pagination.Page) (bool, error) {
+		list, err := servers.ExtractServers(page)
+		if err != nil {
+			return false, err
+		}
+
+		for _, srv := range list {
+			vms = append(vms, *client.toVM(&srv))
+		}
+		return true, nil
+	})
+	if len(vms) == 0 && err != nil {
+		return nil, fmt.Errorf("Error listing vms : %s", errorString(err))
+	}
+	return vms, nil
+}
+
+func (client *Client) getFloatingIP(vmID string) (*floatingip.FloatingIP, error) {
+	pager := floatingip.List(client.nova)
+	var fips []floatingip.FloatingIP
+	err := pager.EachPage(func(page pagination.Page) (bool, error) {
+		list, err := floatingip.ExtractFloatingIPs(page)
+		if err != nil {
+			return false, err
+		}
+
+		for _, fip := range list {
+			if fip.InstanceID == vmID {
+				fips = append(fips, fip)
+			}
+		}
+		return true, nil
+	})
+	if len(fips) == 0 {
+		if err != nil {
+			return nil, fmt.Errorf("No floating IP found for VM %s: %s", vmID, errorString(err))
+		}
+		return nil, fmt.Errorf("No floating IP found for VM %s", vmID)
+
+	}
+	if len(fips) > 1 {
+		return nil, fmt.Errorf("Configuration error, more than one Floating IP associated to VM %s", vmID)
+	}
+	return &fips[0], nil
 }
 
 //DeleteVM deletes the VM identified by id
 func (client *Client) DeleteVM(id string) error {
-	panic("Not implemented")
+	if client.Opts.UseFloatingIP {
+		fip, err := client.getFloatingIP(id)
+		if err != nil {
+			return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
+		}
+		if fip != nil {
+			err = floatingip.DisassociateInstance(client.nova, floatingip.AssociateOpts{
+				ServerID:   id,
+				FloatingIP: fip.IP,
+			}).ExtractErr()
+			if err != nil {
+				return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
+			}
+			err = floatingip.Delete(client.nova, fip.ID).ExtractErr()
+			if err != nil {
+				return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
+			}
+		}
+	}
+	err := servers.Delete(client.nova, id).ExtractErr()
+	if err != nil {
+		return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
+	}
+	return nil
 }
 
 //StopVM stops the VM identified by id
 func (client *Client) StopVM(id string) error {
-	panic("Not implemented")
+	err := startstop.Stop(client.nova, id).ExtractErr()
+	if err != nil {
+		return fmt.Errorf("Error stoping VM : %s", errorString(err))
+	}
+	return nil
 }
 
 //StartVM starts the VM identified by id
 func (client *Client) StartVM(id string) error {
-	panic("Not implemented")
+	err := startstop.Start(client.nova, id).ExtractErr()
+	if err != nil {
+		return fmt.Errorf("Error stoping VM : %s", errorString(err))
+	}
+	return nil
 }
 
 //CreateVolume creates a block volume
 //- name is the name of the volume
 //- size is the size of the volume in GB
 //- volumeType is the type of volume to create, if volumeType is empty the driver use a default type
-func (client *Client) CreateVolume(name string, size float32, volumeType string) (api.Volume, error) {
-	panic("Not implemented")
+func (client *Client) CreateVolume(request api.VolumeRequest) (*api.Volume, error) {
+	vol, err := volumes.Create(client.nova, volumes.CreateOpts{
+		Name:       request.Name,
+		Size:       request.Size,
+		VolumeType: request.Type,
+	}).Extract()
+	if err != nil {
+		return nil, fmt.Errorf("Error creating volume : %s", errorString(err))
+	}
+	v := api.Volume{
+		ID:   vol.ID,
+		Name: vol.Name,
+		Size: vol.Size,
+		Type: vol.VolumeType,
+		//Available: vol.Status,
+	}
+	return &v, nil
 }
 
 //GetVolume returns the volume identified by id
-func (client *Client) GetVolume(id string) (api.Volume, error) {
-	panic("Not implemented")
+func (client *Client) GetVolume(id string) (*api.Volume, error) {
+	vol, err := volumes.Get(client.nova, id).Extract()
+	if err != nil {
+		return nil, fmt.Errorf("Error getting volume: %s", errorString(err))
+	}
+	av := api.Volume{
+		ID:   vol.ID,
+		Name: vol.Name,
+		Size: vol.Size,
+		Type: vol.VolumeType,
+		//Available: vol.Status,
+	}
+	return &av, nil
 }
 
 //ListVolumes list available volumes
@@ -827,6 +1080,30 @@ func (client *Client) ListVolumes() ([]api.Volume, error) {
 //DeleteVolume deletes the volume identified by id
 func (client *Client) DeleteVolume(id string) error {
 	panic("Not implemented")
+}
+
+//ListVolumeTypes list volume types available
+func (client *Client) ListVolumeTypes() ([]api.VolumeType, error) {
+	var vtypes []api.VolumeType
+	err := volumetypes.List(client.nova).EachPage(func(page pagination.Page) (bool, error) {
+		list, err := volumetypes.ExtractVolumeTypes(page)
+		if err != nil {
+			return false, err
+		}
+		for _, vt := range list {
+			avt := api.VolumeType{
+				ID:   vt.ID,
+				Name: vt.Name,
+			}
+			vtypes = append(vtypes, avt)
+		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("Error listing volume types: %s", errorString(err))
+	}
+	return vtypes, nil
+
 }
 
 //CreateVolumeAttachment attaches a volume to a VM

@@ -1,20 +1,39 @@
-package drivers
+package api
+
+import (
+	"github.com/SebastienDorgan/gpac/clients/api/IPVersion"
+	"github.com/SebastienDorgan/gpac/clients/api/VMState"
+)
+
+//TimeoutError defines a Timeout erroe
+type TimeoutError struct {
+	Message string
+}
+
+func (e *TimeoutError) Error() string {
+	return e.Message
+}
 
 //KeyPair represents a SSH key pair
 type KeyPair struct {
-	ID         string
-	Name       string
-	PrivateKey string
-	PublicKey  string
+	ID         string `json:"id,omitempty"`
+	Name       string `json:"name,omitempty"`
+	PrivateKey string `json:"private_key,omitempty"`
+	PublicKey  string `json:"public_key,omitempty"`
+}
+
+//VMSize represent Sizing elements of a VM
+type VMSize struct {
+	Cores    int     `json:"cores,omitempty"`
+	RAMSize  float32 `json:"ram_size,omitempty"`
+	DiskSize int     `json:"disk_size,omitempty"`
 }
 
 //VMTemplate represents a VM template
 type VMTemplate struct {
-	ID       string
-	Name     string
-	Cores    int
-	RAMSize  float32
-	DiskSize int
+	VMSize `json:"vm_size,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Name   string `json:"name,omitempty"`
 }
 
 const (
@@ -44,145 +63,117 @@ func (a ByRankDRF) Less(i, j int) bool { return a[i].RankDRF() < a[j].RankDRF() 
 
 //SizingRequirements represents VM sizing requirements to fulfil
 type SizingRequirements struct {
-	MinCores    int
-	MinRAMSize  float32
-	MinDiskSize int
-}
-
-//VMState represents the state of a VM
-type VMState int
-
-const (
-	/*STOPPED VM is stopped*/
-	STOPPED VMState = iota
-	/*STARTING VM is starting*/
-	STARTING
-	/*STARTED VM is started*/
-	STARTED
-	/*STOPPING VM is stopping*/
-	STOPPING
-	/*ERROR VM is in error state*/
-	ERROR
-)
-
-var vmStates = [...]string{
-	"STOPPED",
-	"STARTING",
-	"STARTED",
-	"STOPPING",
-	"IN_ERROR",
-}
-
-func (state VMState) String() string {
-	return vmStates[state]
-}
-
-//IPVersion is an enum defining IP versions
-type IPVersion int
-
-const (
-	//IPv4 is IP v4 version
-	IPv4 IPVersion = 4
-	//IPv6 is IP v6 version
-	IPv6 IPVersion = 6
-)
-
-var ipVersion = [...]string{
-	"V4",
-	"V6",
-}
-
-func (version IPVersion) String() string {
-	return ipVersion[version]
+	MinCores    int     `json:"min_cores,omitempty"`
+	MinRAMSize  float32 `json:"min_ram_size,omitempty"`
+	MinDiskSize int     `json:"min_disk_size,omitempty"`
 }
 
 //VM represents a virtual machine properties
 type VM struct {
-	ID           string
-	Name         string
-	PrivateIPsV4 []string
-	PrivateIPsV6 []string
-	AccessIPv4   string
-	AccessIPv6   string
-	Size         VMTemplate
-	State        VMState
+	ID           string       `json:"id,omitempty"`
+	Name         string       `json:"name,omitempty"`
+	PrivateIPsV4 []string     `json:"private_i_ps_v_4,omitempty"`
+	PrivateIPsV6 []string     `json:"private_i_ps_v_6,omitempty"`
+	AccessIPv4   string       `json:"access_i_pv_4,omitempty"`
+	AccessIPv6   string       `json:"access_i_pv_6,omitempty"`
+	Size         VMSize       `json:"size,omitempty"`
+	State        VMState.Enum `json:"state,omitempty"`
 }
 
 //VMRequest represents requirements to create virtual machine properties
 type VMRequest struct {
-	Name string
+	Name string `json:"name,omitempty"`
 	//KeyPairID ID of the key pair use to secure SSH connections with the VM
-	KeyPairID string
+	KeyPairID string `json:"key_pair_id,omitempty"`
 	//NetworksIDs list of the network IDs the VM must be connected
-	NetworkIDs []string
+	NetworkIDs []string `json:"network_i_ds,omitempty"`
 	//PublicIP a flg telling if the VM must have a public IP is
-	PublicIP bool
+	PublicIP bool `json:"public_ip,omitempty"`
 	//TemplateID the UUID of the template used to size the VM (see SelectTemplates)
-	TemplateID string
+	TemplateID string `json:"template_id,omitempty"`
 	//ImageID  is the UUID of the image that contains the server's OS and initial state.
-	ImageID string
+	ImageID string `json:"image_id,omitempty"`
 }
 
 //Volume represents an block volume
 type Volume struct {
-	ID        string
-	Name      string
-	Size      float32
-	Type      string
-	Available bool
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Size      int    `json:"size,omitempty"`
+	Type      string `json:"type,omitempty"`
+	Available bool   `json:"available,omitempty"`
+}
+
+//VolumeRequest represents a volume
+type VolumeRequest struct {
+	Name string `json:"name,omitempty"`
+	Size int    `json:"size,omitempty"`
+	Type string `json:"type,omitempty"`
+}
+
+//VolumeType represents a volume type
+type VolumeType struct {
+	ID          string `json:"id,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 //VolumeAttachment represents an volume attachment
 type VolumeAttachment struct {
-	ID     string
-	Name   string
-	Volume Volume
-	VM     VM
+	ID     string `json:"id,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Volume Volume `json:"volume,omitempty"`
+	VM     VM     `json:"vm,omitempty"`
+	Device string `json:"device,omitempty"`
 }
 
 //Image representes an OS image
 type Image struct {
-	ID   string
-	Name string
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 //Network representes a virtual network
 type Network struct {
-	ID   string
-	Name string
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
 	// IDs of the Subnets associated with this network.
-	Subnets []string
+	Subnets []string `json:"subnets,omitempty"`
 }
 
 //Subnet represents a sub network where Mask is defined in CIDR notation
 //like "192.0.2.0/24" or "2001:db8::/32", as defined in RFC 4632 and RFC 4291.
 type Subnet struct {
-	ID   string
-	Name string
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
 	//IPVersion is IPv4 or IPv6 (see IPVersion)
-	IPVersion IPVersion
+	IPVersion IPVersion.Enum `json:"ip_version,omitempty"`
 	//Mask mask in CIDR notation
-	Mask string
+	Mask string `json:"mask,omitempty"`
 	//NetworkID id of the parent network
-	NetworkID string
+	NetworkID string `json:"network_id,omitempty"`
 }
 
 //SubnetRequets represents sub network requirements to create a subnet where Mask is defined in CIDR notation
 //like "192.0.2.0/24" or "2001:db8::/32", as defined in RFC 4632 and RFC 4291.
 type SubnetRequets struct {
-	Name string
+	Name string `json:"name,omitempty"`
 	//IPVersion must be IPv4 or IPv6 (see IPVersion)
-	IPVersion IPVersion
+	IPVersion IPVersion.Enum `json:"ip_version,omitempty"`
 	//Mask mask in CIDR notation
-	Mask string
+	Mask string `json:"mask,omitempty"`
 	//NetworkID id of the parent network
-	NetworkID string
+	NetworkID string `json:"network_id,omitempty"`
 }
 
 //ClientAPI is an API defining an IaaS driver
 type ClientAPI interface {
 	//ListImages lists available OS images
 	ListImages() ([]Image, error)
+	//GetImage returns the Image referenced by id
+	GetImage(id string) (*Image, error)
+	//GetTemplate returns the Template referenced by id
+	GetTemplate(id string) (*VMTemplate, error)
 	//ListTemplates lists available VM templates
 	//VM templates are sorted using Dominant Resource Fairness Algorithm
 	ListTemplates() ([]VMTemplate, error)
@@ -237,13 +228,15 @@ type ClientAPI interface {
 	//- name is the name of the volume
 	//- size is the size of the volume in GB
 	//- volumeType is the type of volume to create, if volumeType is empty the driver use a default type
-	CreateVolume(name string, size float32, volumeType string) (Volume, error)
+	CreateVolume(request VolumeRequest) (*Volume, error)
 	//GetVolume returns the volume identified by id
-	GetVolume(id string) (Volume, error)
+	GetVolume(id string) (*Volume, error)
 	//ListVolumes list available volumes
 	ListVolumes() ([]Volume, error)
 	//DeleteVolume deletes the volume identified by id
 	DeleteVolume(id string) error
+	//ListVolumeTypes list volume types available
+	ListVolumeTypes() ([]VolumeType, error)
 
 	//CreateVolumeAttachment attaches a volume to a VM
 	//- name the name of the volume attachment
