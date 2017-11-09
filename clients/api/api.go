@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/SebastienDorgan/gpac/clients/api/IPVersion"
 	"github.com/SebastienDorgan/gpac/clients/api/VMState"
+	"github.com/SebastienDorgan/gpac/clients/api/VolumeState"
 )
 
 //TimeoutError defines a Timeout erroe
@@ -35,31 +36,6 @@ type VMTemplate struct {
 	ID     string `json:"id,omitempty"`
 	Name   string `json:"name,omitempty"`
 }
-
-const (
-	//CoreDRFWeight is the Dominant Resource Fairness weight of a core
-	CoreDRFWeight float32 = 1.0
-	//RAMDRFWeight is the Dominant Resource Fairness weight of 1 GB of RAM
-	RAMDRFWeight float32 = 1.0 / 8.0
-	//DiskDRFWeight is the Dominant Resource Fairness weight of 1 GB of Disk
-	DiskDRFWeight float32 = 1.0 / 16.0
-)
-
-//RankDRF computes the Dominant Resource Fairness Rank of a VM template
-func (t *VMTemplate) RankDRF() float32 {
-	fc := float32(t.Cores)
-	fr := t.RAMSize
-	fd := float32(t.DiskSize)
-	return fc*CoreDRFWeight + fr*RAMDRFWeight + fd*DiskDRFWeight
-}
-
-// ByRankDRF implements sort.Interface for []VMTemplate based on
-// the Dominant Resource Fairness
-type ByRankDRF []VMTemplate
-
-func (a ByRankDRF) Len() int           { return len(a) }
-func (a ByRankDRF) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByRankDRF) Less(i, j int) bool { return a[i].RankDRF() < a[j].RankDRF() }
 
 //SizingRequirements represents VM sizing requirements to fulfil
 type SizingRequirements struct {
@@ -97,14 +73,14 @@ type VMRequest struct {
 
 //Volume represents an block volume
 type Volume struct {
-	ID        string `json:"id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Size      int    `json:"size,omitempty"`
-	Type      string `json:"type,omitempty"`
-	Available bool   `json:"available,omitempty"`
+	ID    string           `json:"id,omitempty"`
+	Name  string           `json:"name,omitempty"`
+	Size  int              `json:"size,omitempty"`
+	Type  string           `json:"type,omitempty"`
+	State VolumeState.Enum `json:"state,omitempty"`
 }
 
-//VolumeRequest represents a volume
+//VolumeRequest represents a volume request
 type VolumeRequest struct {
 	Name string `json:"name,omitempty"`
 	Size int    `json:"size,omitempty"`
@@ -125,6 +101,13 @@ type VolumeAttachment struct {
 	Volume Volume `json:"volume,omitempty"`
 	VM     VM     `json:"vm,omitempty"`
 	Device string `json:"device,omitempty"`
+}
+
+//VolumeAttachmentRequest represents an volume attachment request
+type VolumeAttachmentRequest struct {
+	Name   string `json:"name,omitempty"`
+	Volume Volume `json:"volume,omitempty"`
+	VM     VM     `json:"vm,omitempty"`
 }
 
 //Image representes an OS image
@@ -177,9 +160,6 @@ type ClientAPI interface {
 	//ListTemplates lists available VM templates
 	//VM templates are sorted using Dominant Resource Fairness Algorithm
 	ListTemplates() ([]VMTemplate, error)
-	//SelectTemplates lists VM templates compatible with sizing requirements
-	//VM templates are sorted using Dominant Resource Fairness Algorithm
-	SelectTemplates(sizing SizingRequirements) ([]VMTemplate, error)
 
 	//CreateKeyPair creates and import a key pair
 	CreateKeyPair(name string) (*KeyPair, error)
@@ -242,9 +222,9 @@ type ClientAPI interface {
 	//- name the name of the volume attachment
 	//- volume the volume to attach
 	//- vm the VM on which the volume is attached
-	CreateVolumeAttachment(name string, volume Volume, vm VM) (VolumeAttachment, error)
+	CreateVolumeAttachment(request VolumeAttachmentRequest) (*VolumeAttachment, error)
 	//GetVolumeAttachment returns the volume attachment identified by id
-	GetVolumeAttachment(id string) (VolumeAttachment, error)
+	GetVolumeAttachment(id string) (*VolumeAttachment, error)
 	//ListVolumeAttachments lists available volume attachment
 	ListVolumeAttachments() ([]VolumeAttachment, error)
 	//DeleteVolumeAttachment deletes the volume attachment identifed by id

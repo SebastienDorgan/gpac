@@ -11,9 +11,9 @@ import (
 	"github.com/SebastienDorgan/gpac/clients"
 
 	"github.com/SebastienDorgan/gpac/clients/api/IPVersion"
+	"github.com/SebastienDorgan/gpac/clients/api/VolumeState"
 
 	"github.com/SebastienDorgan/gpac/clients/api/VMState"
-
 	"github.com/rackspace/gophercloud/openstack/blockstorage/v1/volumetypes"
 
 	"github.com/rackspace/gophercloud/openstack/blockstorage/v1/volumes"
@@ -168,6 +168,7 @@ type Client struct {
 	securityGroup *secgroups.SecurityGroup
 }
 
+//getProviderNetwork returns the provider network
 func (client *Client) getProviderNetwork() (*networks.Network, error) {
 	var nets []networks.Network
 	opts := networks.ListOpts{Name: client.Opts.ProviderNetwork}
@@ -194,6 +195,7 @@ func (client *Client) getProviderNetwork() (*networks.Network, error) {
 	return &nets[0], nil
 }
 
+//createDefaultRouter create a router on the provider network
 func (client *Client) createDefaultRouter() error {
 	pNet, err := client.getProviderNetwork()
 	if err != nil {
@@ -217,6 +219,7 @@ func (client *Client) createDefaultRouter() error {
 
 }
 
+//getDefaultSecurityGroup returns the default security group
 func (client *Client) getDefaultSecurityGroup() (*secgroups.SecurityGroup, error) {
 	var sgList []secgroups.SecurityGroup
 
@@ -242,6 +245,7 @@ func (client *Client) getDefaultSecurityGroup() (*secgroups.SecurityGroup, error
 	return &sgList[0], nil
 }
 
+//createTCPRules creates TCP rules to configure the default security group
 func (client *Client) createTCPRules(groupID string) error {
 	//Open TCP Ports
 	ruleOpts := secgroups.CreateRuleOpts{
@@ -266,6 +270,8 @@ func (client *Client) createTCPRules(groupID string) error {
 	_, err = secgroups.CreateRule(client.nova, ruleOpts).Extract()
 	return err
 }
+
+//createTCPRules creates UDP rules to configure the default security group
 func (client *Client) createUDPRules(groupID string) error {
 	//Open UDP Ports
 	ruleOpts := secgroups.CreateRuleOpts{
@@ -290,6 +296,8 @@ func (client *Client) createUDPRules(groupID string) error {
 	_, err = secgroups.CreateRule(client.nova, ruleOpts).Extract()
 	return err
 }
+
+//createICMPRules creates UDP rules to configure the default security group
 func (client *Client) createICMPRules(groupID string) error {
 	//Open TCP Ports
 	ruleOpts := secgroups.CreateRuleOpts{
@@ -802,6 +810,7 @@ func (client *Client) DeleteSubnet(id string) error {
 	return nil
 }
 
+//toVMSize converts flavor attributes returned by OpenStack driver into api.VM
 func (client *Client) toVMSize(flavor map[string]interface{}) api.VMSize {
 	if i, ok := flavor["id"]; ok {
 		fid := i.(string)
@@ -818,6 +827,7 @@ func (client *Client) toVMSize(flavor map[string]interface{}) api.VMSize {
 	return api.VMSize{}
 }
 
+//toVMState converts VM status returned by OpenStack driver into VMState enum
 func toVMState(status string) VMState.Enum {
 	switch status {
 	case "BUILD", "build", "BUILDING", "building":
@@ -833,6 +843,7 @@ func toVMState(status string) VMState.Enum {
 	}
 }
 
+//convertAdresses converts adresses returned by the OpenStack driver arrange them by version in a map
 func (client *Client) convertAdresses(addresses map[string]interface{}) map[IPVersion.Enum][]string {
 	addrs := make(map[IPVersion.Enum][]string)
 	for n, obj := range addresses {
@@ -854,6 +865,7 @@ func (client *Client) convertAdresses(addresses map[string]interface{}) map[IPVe
 	return addrs
 }
 
+//toVM converts an OpenStack server into api VM
 func (client *Client) toVM(server *servers.Server) *api.VM {
 	adresses := client.convertAdresses(server.Addresses)
 	vm := api.VM{
@@ -958,6 +970,8 @@ func (client *Client) ListVMs() ([]api.VM, error) {
 	return vms, nil
 }
 
+//getFloatingIP returns the floating IP associated with the VM identified by vmID
+//By convention only one floating IP is allocated to a VM
 func (client *Client) getFloatingIP(vmID string) (*floatingip.FloatingIP, error) {
 	pager := floatingip.List(client.nova)
 	var fips []floatingip.FloatingIP
@@ -1033,6 +1047,28 @@ func (client *Client) StartVM(id string) error {
 	return nil
 }
 
+//toVM converts a Volume status returned by the OpenStack driver into VolumeState enum
+func toVolumeState(status string) VolumeState.Enum {
+	switch status {
+	case "creating":
+		return VolumeState.CREATING
+	case "available":
+		return VolumeState.AVAILABLE
+	case "attaching":
+		return VolumeState.ATTACHING
+	case "detaching":
+		return VolumeState.DETACHING
+	case "in-use":
+		return VolumeState.USED
+	case "deleting":
+		return VolumeState.DELETING
+	case "error", "error_deleting", "error_backing-up", "error_restoring", "error_extending":
+		return VolumeState.ERROR
+	default:
+		return VolumeState.OTHER
+	}
+}
+
 //CreateVolume creates a block volume
 //- name is the name of the volume
 //- size is the size of the volume in GB
@@ -1047,11 +1083,11 @@ func (client *Client) CreateVolume(request api.VolumeRequest) (*api.Volume, erro
 		return nil, fmt.Errorf("Error creating volume : %s", errorString(err))
 	}
 	v := api.Volume{
-		ID:   vol.ID,
-		Name: vol.Name,
-		Size: vol.Size,
-		Type: vol.VolumeType,
-		//Available: vol.Status,
+		ID:    vol.ID,
+		Name:  vol.Name,
+		Size:  vol.Size,
+		Type:  vol.VolumeType,
+		State: toVolumeState(vol.Status),
 	}
 	return &v, nil
 }
@@ -1063,23 +1099,48 @@ func (client *Client) GetVolume(id string) (*api.Volume, error) {
 		return nil, fmt.Errorf("Error getting volume: %s", errorString(err))
 	}
 	av := api.Volume{
-		ID:   vol.ID,
-		Name: vol.Name,
-		Size: vol.Size,
-		Type: vol.VolumeType,
-		//Available: vol.Status,
+		ID:    vol.ID,
+		Name:  vol.Name,
+		Size:  vol.Size,
+		Type:  vol.VolumeType,
+		State: toVolumeState(vol.Status),
 	}
 	return &av, nil
 }
 
 //ListVolumes list available volumes
 func (client *Client) ListVolumes() ([]api.Volume, error) {
-	panic("Not implemented")
+	var vs []api.Volume
+	err := volumes.List(client.nova, volumes.ListOpts{}).EachPage(func(page pagination.Page) (bool, error) {
+		list, err := volumes.ExtractVolumes(page)
+		if err != nil {
+			return false, err
+		}
+		for _, vol := range list {
+			av := api.Volume{
+				ID:    vol.ID,
+				Name:  vol.Name,
+				Size:  vol.Size,
+				Type:  vol.VolumeType,
+				State: toVolumeState(vol.Status),
+			}
+			vs = append(vs, av)
+		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("Error listing volume types: %s", errorString(err))
+	}
+	return vs, nil
 }
 
 //DeleteVolume deletes the volume identified by id
 func (client *Client) DeleteVolume(id string) error {
-	panic("Not implemented")
+	err := volumes.Delete(client.nova, id).ExtractErr()
+	if err != nil {
+		return fmt.Errorf("Error deleting volume: %s", errorString(err))
+	}
+	return nil
 }
 
 //ListVolumeTypes list volume types available
@@ -1110,12 +1171,12 @@ func (client *Client) ListVolumeTypes() ([]api.VolumeType, error) {
 //- name the name of the volume attachment
 //- volume the volume to attach
 //- vm the VM on which the volume is attached
-func (client *Client) CreateVolumeAttachment(name string, volume api.Volume, vm api.VM) (api.VolumeAttachment, error) {
+func (client *Client) CreateVolumeAttachment(request api.VolumeAttachmentRequest) (*api.VolumeAttachment, error) {
 	panic("Not implemented")
 }
 
 //GetVolumeAttachment returns the volume attachment identified by id
-func (client *Client) GetVolumeAttachment(id string) (api.VolumeAttachment, error) {
+func (client *Client) GetVolumeAttachment(id string) (*api.VolumeAttachment, error) {
 	panic("Not implemented")
 }
 

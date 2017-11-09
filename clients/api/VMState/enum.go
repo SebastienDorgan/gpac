@@ -17,15 +17,3 @@ const (
 	/*ERROR VM is in error state*/
 	ERROR
 )
-
-// var vmStates = [...]string{
-// 	"STOPPED",
-// 	"STARTING",
-// 	"STARTED",
-// 	"STOPPING",
-// 	"IN_ERROR",
-// }
-
-// func (state Enum) String() string {
-// 	return vmStates[state]
-// }
