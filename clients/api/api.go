@@ -151,6 +151,10 @@ type SubnetRequets struct {
 
 //ClientAPI is an API defining an IaaS driver
 type ClientAPI interface {
+	//SetDefaultUser set the default user
+	SetDefaultUser(user string)
+	//GetDefaultUser returns server default user
+	GetDefaultUser() string
 	//ListImages lists available OS images
 	ListImages() ([]Image, error)
 	//GetImage returns the Image referenced by id

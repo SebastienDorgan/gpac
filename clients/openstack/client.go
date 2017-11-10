@@ -95,6 +95,9 @@ type AuthOptions struct {
 	//FloatingIPPool name of the floating IP pool
 	//Necessary only if UseFloatingIP is true
 	FloatingIPPool string
+
+	//Default VM user, if not provided root is considered
+	DefaultUser string
 }
 
 func errorString(err error) string {
@@ -152,6 +155,7 @@ func AuthenticatedClient(opts AuthOptions) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	clt.defaultUser = opts.DefaultUser
 	return &clt, nil
 }
 
@@ -166,6 +170,7 @@ type Client struct {
 	neutron       *gc.ServiceClient
 	router        *routers.Router
 	securityGroup *secgroups.SecurityGroup
+	defaultUser   string
 }
 
 //getProviderNetwork returns the provider network
@@ -393,6 +398,16 @@ func (client *Client) initDefaultRouter() error {
 	return client.createDefaultRouter()
 }
 
+//SetDefaultUser set the default user
+func (client *Client) SetDefaultUser(user string) {
+	client.defaultUser = user
+}
+
+//GetDefaultUser returns server default user
+func (client *Client) GetDefaultUser() string {
+	return client.defaultUser
+}
+
 //ListImages lists available OS images
 func (client *Client) ListImages() ([]api.Image, error) {
 	opts := images.ListOpts{}
@@ -477,49 +492,6 @@ func (client *Client) ListTemplates() ([]api.VMTemplate, error) {
 				Name: flv.Name,
 			})
 
-		}
-		return true, nil
-	})
-	if len(flvList) == 0 {
-		if err != nil {
-			return nil, err
-		}
-	}
-	sort.Sort(api.ByRankDRF(flvList))
-	return flvList, nil
-}
-
-//SelectTemplates lists VM templates compatible with sizing requirements
-//VM templates are sorted using Dominant Resource Fairness Algorithm
-func (client *Client) SelectTemplates(sizing api.SizingRequirements) ([]api.VMTemplate, error) {
-	opts := flavors.ListOpts{
-		MinDisk: sizing.MinDiskSize,
-		MinRAM:  int(sizing.MinRAMSize * 1000.0),
-	}
-
-	// Retrieve a pager (i.e. a paginated collection)
-	pager := flavors.ListDetail(client.nova, opts)
-
-	var flvList []api.VMTemplate
-
-	// Define an anonymous function to be executed on each page's iteration
-	err := pager.EachPage(func(page pagination.Page) (bool, error) {
-		flavorList, err := flavors.ExtractFlavors(page)
-		if err != nil {
-			return false, err
-		}
-		for _, flv := range flavorList {
-			if flv.VCPUs >= sizing.MinCores {
-				flvList = append(flvList, api.VMTemplate{
-					VMSize: api.VMSize{
-						Cores:    flv.VCPUs,
-						RAMSize:  float32(flv.RAM) / 1000.0,
-						DiskSize: flv.Disk,
-					},
-					ID:   flv.ID,
-					Name: flv.Name,
-				})
-			}
 		}
 		return true, nil
 	})

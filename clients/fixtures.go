@@ -3,6 +3,7 @@ package clients
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/satori/go.uuid"
@@ -43,7 +44,17 @@ func (a ByRankDRF) Less(i, j int) bool { return RankDRF(&a[i]) < RankDRF(&a[j]) 
 type ServerAccess struct {
 	VM      *api.VM
 	Key     *api.KeyPair
+	User    string
 	Gateway *ServerAccess
+}
+
+//GetAccessIP returns the access IP
+func (access *ServerAccess) GetAccessIP() string {
+	ip := access.VM.AccessIPv4
+	if len(ip) == 0 {
+		ip = access.VM.AccessIPv6
+	}
+	return ip
 }
 
 //ServerRequest used to create a server
@@ -64,8 +75,11 @@ type ServerRequest struct {
 //WaitVMState waits a vm achieve state
 func WaitVMState(client api.ClientAPI, vmID string, state VMState.Enum, timeout time.Duration) (*api.VM, error) {
 	cout := make(chan int)
+	defer close(cout)
 	next := make(chan bool)
+	defer close(next)
 	vmc := make(chan *api.VM)
+	defer close(vmc)
 	go poll(client, vmID, state, cout, next, vmc)
 	for {
 		select {
@@ -175,8 +189,9 @@ func SelectTemplatesBySize(client api.ClientAPI, sizing api.SizingRequirements) 
 	return selectedTpls, nil
 }
 
-//CreateServer creates a sever fitting request
-func CreateServer(client api.ClientAPI, request ServerRequest) (*ServerAccess, error) {
+//SearchImage search an image corresponding to OS Name
+//use the Jaro Winkler algorithm to match os name and image name
+func SearchImage(client api.ClientAPI, osname string) (*api.Image, error) {
 	imgs, err := client.ListImages()
 	if err != nil {
 		return nil, err
@@ -184,14 +199,23 @@ func CreateServer(client api.ClientAPI, request ServerRequest) (*ServerAccess, e
 	maxscore := 0.0
 	maxi := 0
 	for i, img := range imgs {
-		score := smetrics.JaroWinkler(img.Name, request.OSName, 0.7, 4)
+		score := smetrics.JaroWinkler(strings.ToUpper(img.Name), strings.ToUpper(osname), 0.7, 4)
 		if score > maxscore {
 			maxscore = score
 			maxi = i
 		}
 	}
 	if maxscore < 0.8 {
-		return nil, fmt.Errorf("Unable to found and image matching %s", request.OSName)
+		return nil, fmt.Errorf("Unable to found and image matching %s", osname)
+	}
+	return &imgs[maxi], nil
+}
+
+//CreateServer creates a sever fitting request
+func CreateServer(client api.ClientAPI, request ServerRequest) (*ServerAccess, error) {
+	img, err := SearchImage(client, request.OSName)
+	if err != nil {
+		return nil, err
 	}
 	kpName := uuid.NewV4().String()
 	kp, err := client.CreateKeyPair(kpName)
@@ -206,7 +230,7 @@ func CreateServer(client api.ClientAPI, request ServerRequest) (*ServerAccess, e
 	}
 	vmReq := api.VMRequest{
 		Name:       request.Name,
-		ImageID:    imgs[maxi].ID,
+		ImageID:    img.ID,
 		KeyPairID:  kp.ID,
 		PublicIP:   request.PublicIP,
 		NetworkIDs: netIds,
@@ -219,6 +243,7 @@ func CreateServer(client api.ClientAPI, request ServerRequest) (*ServerAccess, e
 	return &ServerAccess{
 		VM:      vm,
 		Key:     kp,
+		User:    client.GetDefaultUser(),
 		Gateway: request.Gateway,
 	}, nil
 }
