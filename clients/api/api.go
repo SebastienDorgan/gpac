@@ -96,18 +96,18 @@ type VolumeType struct {
 
 //VolumeAttachment represents an volume attachment
 type VolumeAttachment struct {
-	ID     string `json:"id,omitempty"`
-	Name   string `json:"name,omitempty"`
-	Volume Volume `json:"volume,omitempty"`
-	VM     VM     `json:"vm,omitempty"`
-	Device string `json:"device,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Name     string `json:"name,omitempty"`
+	VolumeID string `json:"volume,omitempty"`
+	ServerID string `json:"vm,omitempty"`
+	Device   string `json:"device,omitempty"`
 }
 
 //VolumeAttachmentRequest represents an volume attachment request
 type VolumeAttachmentRequest struct {
-	Name   string `json:"name,omitempty"`
-	Volume Volume `json:"volume,omitempty"`
-	VM     VM     `json:"vm,omitempty"`
+	Name     string `json:"name,omitempty"`
+	VolumeID string `json:"volume,omitempty"`
+	ServerID string `json:"vm,omitempty"`
 }
 
 //Image representes an OS image

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/volumeattach"
+
 	"github.com/SebastienDorgan/gpac/clients"
 
 	"github.com/SebastienDorgan/gpac/clients/api/IPVersion"
@@ -1144,20 +1146,65 @@ func (client *Client) ListVolumeTypes() ([]api.VolumeType, error) {
 //- volume the volume to attach
 //- vm the VM on which the volume is attached
 func (client *Client) CreateVolumeAttachment(request api.VolumeAttachmentRequest) (*api.VolumeAttachment, error) {
-	panic("Not implemented")
+	va, err := volumeattach.Create(client.nova, request.VM.ID, volumeattach.CreateOpts{
+		VolumeID: request.Volume.ID,
+	}).Extract()
+	if err != nil {
+		return nil, fmt.Errorf("Error creating volume attachement between server %s and volume: %s",request.VM.ID, request.Volume.ID errorString(err))
+	}
+	
+	return & api.VolumeAttachment{
+		ID: va.ID,
+		ServerID: va.ServerID,
+		VolumeID: va.VolumeID,
+		Device: va.Device
+	}, nil
 }
 
 //GetVolumeAttachment returns the volume attachment identified by id
 func (client *Client) GetVolumeAttachment(id string) (*api.VolumeAttachment, error) {
-	panic("Not implemented")
+	va, err := volumeattach.Get(client.nova, id).Extract()
+	if err != nil {
+		return nil, fmt.Errorf("Error getting volume attachement %s: %s",id, errorString(err))
+	}
+	return & api.VolumeAttachment{
+		ID: va.ID,
+		ServerID: va.ServerID,
+		VolumeID: va.VolumeID,
+		Device: va.Device
+	}, nil
 }
 
 //ListVolumeAttachments lists available volume attachment
 func (client *Client) ListVolumeAttachments() ([]api.VolumeAttachment, error) {
-	panic("Not implemented")
+	var vs []api.VolumeAttachment
+	err := volumeattach.List(client.nova, volumeattach.ListOpts{}).EachPage(func(page pagination.Page) (bool, error) {
+		list, err := volumeattach.ExtractVolumeAttachments(page)
+		if err != nil {
+			return false, err
+		}
+		for _, va := range list {
+			ava = api.VolumeAttachment{
+				ID: va.ID,
+				ServerID: va.ServerID,
+				VolumeID: va.VolumeID,
+				Device: va.Device
+			}
+			vs = append(vs, ava)
+		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("Error listing volume types: %s", errorString(err))
+	}
+	return vs, nil
 }
 
 //DeleteVolumeAttachment deletes the volume attachment identifed by id
 func (client *Client) DeleteVolumeAttachment(id string) error {
-	panic("Not implemented")
+	err := volumeattach.Delete(client.nova, id).ExtractErr()
+	if err != nil {
+		return nil, fmt.Errorf("Error deleting volume attachement %s: %s",id, errorString(err))
+	}
+	return nil
 }
