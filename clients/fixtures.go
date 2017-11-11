@@ -97,7 +97,7 @@ func WaitVMState(client api.ClientAPI, vmID string, state VMState.Enum, timeout 
 				fmt.Println("Continue")
 				next <- true
 			}
-		case <-time.After(time.Second * timeout):
+		case <-time.After(timeout):
 			next <- false
 			return nil, &api.TimeoutError{Message: "Wait vm state timeout"}
 		}
