@@ -228,9 +228,9 @@ type ClientAPI interface {
 	//- vm the VM on which the volume is attached
 	CreateVolumeAttachment(request VolumeAttachmentRequest) (*VolumeAttachment, error)
 	//GetVolumeAttachment returns the volume attachment identified by id
-	GetVolumeAttachment(id string) (*VolumeAttachment, error)
+	GetVolumeAttachment(serverID, id string) (*VolumeAttachment, error)
 	//ListVolumeAttachments lists available volume attachment
-	ListVolumeAttachments() ([]VolumeAttachment, error)
+	ListVolumeAttachments(serverID string) ([]VolumeAttachment, error)
 	//DeleteVolumeAttachment deletes the volume attachment identifed by id
-	DeleteVolumeAttachment(id string) error
+	DeleteVolumeAttachment(serverID, id string) error
 }

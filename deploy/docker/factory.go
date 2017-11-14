@@ -7,16 +7,16 @@ import (
 	"os"
 	"time"
 
+	"github.com/SebastienDorgan/gpac/system"
+
 	"github.com/GeertJohan/go.rice"
 	"github.com/juju/loggo"
-
-	"github.com/SebastienDorgan/gpac/clients"
 )
 
 var logger = loggo.GetLogger("deploy.docker")
 
 //Install install docker an a remote host
-func Install(ssh *clients.SSHHelper, useSudo bool) error {
+func Install(ssh *system.SSHHelper, useSudo bool) error {
 	f, err := ioutil.TempFile("/tmp", "install_docker")
 	defer f.Close()
 	defer os.Remove(f.Name())

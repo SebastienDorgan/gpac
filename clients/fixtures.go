@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SebastienDorgan/gpac/clients/api/VolumeState"
+
 	"github.com/satori/go.uuid"
 
 	"github.com/xrash/smetrics"
@@ -75,12 +77,10 @@ type ServerRequest struct {
 //WaitVMState waits a vm achieve state
 func WaitVMState(client api.ClientAPI, vmID string, state VMState.Enum, timeout time.Duration) (*api.VM, error) {
 	cout := make(chan int)
-	defer close(cout)
 	next := make(chan bool)
-	defer close(next)
 	vmc := make(chan *api.VM)
-	defer close(vmc)
-	go poll(client, vmID, state, cout, next, vmc)
+
+	go pollVM(client, vmID, state, cout, next, vmc)
 	for {
 		select {
 		case res := <-cout:
@@ -90,11 +90,9 @@ func WaitVMState(client api.ClientAPI, vmID string, state VMState.Enum, timeout 
 			}
 			if res == 1 {
 				//next <- false
-				fmt.Println("Found Found")
 				return <-vmc, nil
 			}
 			if res == 2 {
-				fmt.Println("Continue")
 				next <- true
 			}
 		case <-time.After(timeout):
@@ -104,18 +102,67 @@ func WaitVMState(client api.ClientAPI, vmID string, state VMState.Enum, timeout 
 	}
 }
 
-func poll(client api.ClientAPI, vmID string, state VMState.Enum, cout chan int, next chan bool, vmc chan *api.VM) {
+func pollVM(client api.ClientAPI, vmID string, state VMState.Enum, cout chan int, next chan bool, vmc chan *api.VM) {
 	for {
+
 		vm, err := client.GetVM(vmID)
-		fmt.Println(vm.State.String())
 		if err != nil {
+
 			cout <- 0
 			return
 		}
 		if vm.State == state {
 			cout <- 1
 			vmc <- vm
-			fmt.Println("Found")
+			return
+		}
+		cout <- 2
+		if !<-next {
+			return
+		}
+	}
+}
+
+//WaitVolumeState waits a vm achieve state
+func WaitVolumeState(client api.ClientAPI, volumeID string, state VolumeState.Enum, timeout time.Duration) (*api.Volume, error) {
+	cout := make(chan int)
+	next := make(chan bool)
+	vc := make(chan *api.Volume)
+
+	go pollVolume(client, volumeID, state, cout, next, vc)
+	for {
+		select {
+		case res := <-cout:
+			if res == 0 {
+				//next <- false
+				return nil, fmt.Errorf("Error getting vm state")
+			}
+			if res == 1 {
+				//next <- false
+				return <-vc, nil
+			}
+			if res == 2 {
+				next <- true
+			}
+		case <-time.After(timeout):
+			next <- false
+			return nil, &api.TimeoutError{Message: "Wait vm state timeout"}
+		}
+	}
+}
+
+func pollVolume(client api.ClientAPI, volumeID string, state VolumeState.Enum, cout chan int, next chan bool, vmc chan *api.Volume) {
+	for {
+
+		v, err := client.GetVolume(volumeID)
+		if err != nil {
+
+			cout <- 0
+			return
+		}
+		if v.State == state {
+			cout <- 1
+			vmc <- v
 			return
 		}
 		cout <- 2
@@ -132,8 +179,6 @@ type NetworkRequest struct {
 	IPVersion IPVersion.Enum `json:"ip_version,omitempty"`
 	//Mask mask in CIDR notation
 	Mask string `json:"mask,omitempty"`
-	//NetworkID id of the parent network
-	NetworkID string `json:"network_id,omitempty"`
 }
 
 //CreateNetwork create a network with a default subnet

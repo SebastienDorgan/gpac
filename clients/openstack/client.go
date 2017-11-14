@@ -6,7 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"sort"
+	"time"
 
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/volumeattach"
 
@@ -143,11 +143,18 @@ func AuthenticatedClient(opts AuthOptions) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	blocstorage, err := openstack.NewBlockStorageV1(pClient, gc.EndpointOpts{
+		Region: opts.Region,
+	})
+	if err != nil {
+		return nil, err
+	}
 	clt := Client{
-		Opts:    &opts,
-		pClient: pClient,
-		nova:    compute,
-		neutron: network,
+		Opts:        &opts,
+		pClient:     pClient,
+		nova:        compute,
+		neutron:     network,
+		blocstorage: blocstorage,
 	}
 	err = clt.initDefaultRouter()
 	if err != nil {
@@ -166,11 +173,13 @@ const defaultSecurityGroup string = "30ad3142-a5ec-44b5-9560-618bde3de1ef"
 
 //Client is the implementation of the openstack driver regarding to the api.ClientAPI
 type Client struct {
-	Opts          *AuthOptions
-	pClient       *gc.ProviderClient
-	nova          *gc.ServiceClient
-	neutron       *gc.ServiceClient
-	router        *routers.Router
+	Opts        *AuthOptions
+	pClient     *gc.ProviderClient
+	nova        *gc.ServiceClient
+	neutron     *gc.ServiceClient
+	blocstorage *gc.ServiceClient
+	router      *routers.Router
+
 	securityGroup *secgroups.SecurityGroup
 	defaultUser   string
 }
@@ -502,7 +511,6 @@ func (client *Client) ListTemplates() ([]api.VMTemplate, error) {
 			return nil, err
 		}
 	}
-	sort.Sort(api.ByRankDRF(flvList))
 	return flvList, nil
 }
 
@@ -877,15 +885,18 @@ func (client *Client) CreateVM(request api.VMRequest) (*api.VM, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
 	}
-	fmt.Println("Waiting VM")
-	vm, err := clients.WaitVMState(client, server.ID, VMState.STARTED, 120)
+
+	//Wait that VM is started
+	vm, err := clients.WaitVMState(client, server.ID, VMState.STARTED, 120*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("Timeout creating VM: %s", errorString(err))
 	}
+	//Not use Floating IP or no public address requested
 	if !client.Opts.UseFloatingIP || !request.PublicIP {
 		return vm, nil
 	}
-	fmt.Println("Creating floating IP")
+
+	//Create the floating IP
 	ip, err := floatingip.Create(client.nova, floatingip.CreateOpts{
 		Pool: client.Opts.FloatingIPPool,
 	}).Extract()
@@ -893,7 +904,8 @@ func (client *Client) CreateVM(request api.VMRequest) (*api.VM, error) {
 		servers.Delete(client.nova, vm.ID)
 		return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
 	}
-	fmt.Println("AssociateInstance")
+
+	//Associate floating IP to VM
 	err = floatingip.AssociateInstance(client.nova, floatingip.AssociateOpts{
 		FloatingIP: ip.IP,
 		ServerID:   vm.ID,
@@ -903,7 +915,7 @@ func (client *Client) CreateVM(request api.VMRequest) (*api.VM, error) {
 		servers.Delete(client.nova, vm.ID)
 		return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
 	}
-	fmt.Println("VM ready")
+
 	if IPVersion.IPv4.Is(ip.IP) {
 		vm.AccessIPv4 = ip.IP
 	} else if IPVersion.IPv6.Is(ip.IP) {
@@ -979,20 +991,19 @@ func (client *Client) getFloatingIP(vmID string) (*floatingip.FloatingIP, error)
 func (client *Client) DeleteVM(id string) error {
 	if client.Opts.UseFloatingIP {
 		fip, err := client.getFloatingIP(id)
-		if err != nil {
-			return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
-		}
-		if fip != nil {
-			err = floatingip.DisassociateInstance(client.nova, floatingip.AssociateOpts{
-				ServerID:   id,
-				FloatingIP: fip.IP,
-			}).ExtractErr()
-			if err != nil {
-				return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
-			}
-			err = floatingip.Delete(client.nova, fip.ID).ExtractErr()
-			if err != nil {
-				return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
+		if err == nil {
+			if fip != nil {
+				err = floatingip.DisassociateInstance(client.nova, floatingip.AssociateOpts{
+					ServerID:   id,
+					FloatingIP: fip.IP,
+				}).ExtractErr()
+				if err != nil {
+					return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
+				}
+				err = floatingip.Delete(client.nova, fip.ID).ExtractErr()
+				if err != nil {
+					return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
+				}
 			}
 		}
 	}
@@ -1048,7 +1059,7 @@ func toVolumeState(status string) VolumeState.Enum {
 //- size is the size of the volume in GB
 //- volumeType is the type of volume to create, if volumeType is empty the driver use a default type
 func (client *Client) CreateVolume(request api.VolumeRequest) (*api.Volume, error) {
-	vol, err := volumes.Create(client.nova, volumes.CreateOpts{
+	vol, err := volumes.Create(client.blocstorage, volumes.CreateOpts{
 		Name:       request.Name,
 		Size:       request.Size,
 		VolumeType: request.Type,
@@ -1068,7 +1079,7 @@ func (client *Client) CreateVolume(request api.VolumeRequest) (*api.Volume, erro
 
 //GetVolume returns the volume identified by id
 func (client *Client) GetVolume(id string) (*api.Volume, error) {
-	vol, err := volumes.Get(client.nova, id).Extract()
+	vol, err := volumes.Get(client.blocstorage, id).Extract()
 	if err != nil {
 		return nil, fmt.Errorf("Error getting volume: %s", errorString(err))
 	}
@@ -1085,7 +1096,7 @@ func (client *Client) GetVolume(id string) (*api.Volume, error) {
 //ListVolumes list available volumes
 func (client *Client) ListVolumes() ([]api.Volume, error) {
 	var vs []api.Volume
-	err := volumes.List(client.nova, volumes.ListOpts{}).EachPage(func(page pagination.Page) (bool, error) {
+	err := volumes.List(client.blocstorage, volumes.ListOpts{}).EachPage(func(page pagination.Page) (bool, error) {
 		list, err := volumes.ExtractVolumes(page)
 		if err != nil {
 			return false, err
@@ -1110,7 +1121,7 @@ func (client *Client) ListVolumes() ([]api.Volume, error) {
 
 //DeleteVolume deletes the volume identified by id
 func (client *Client) DeleteVolume(id string) error {
-	err := volumes.Delete(client.nova, id).ExtractErr()
+	err := volumes.Delete(client.blocstorage, id).ExtractErr()
 	if err != nil {
 		return fmt.Errorf("Error deleting volume: %s", errorString(err))
 	}
@@ -1120,7 +1131,7 @@ func (client *Client) DeleteVolume(id string) error {
 //ListVolumeTypes list volume types available
 func (client *Client) ListVolumeTypes() ([]api.VolumeType, error) {
 	var vtypes []api.VolumeType
-	err := volumetypes.List(client.nova).EachPage(func(page pagination.Page) (bool, error) {
+	err := volumetypes.List(client.blocstorage).EachPage(func(page pagination.Page) (bool, error) {
 		list, err := volumetypes.ExtractVolumeTypes(page)
 		if err != nil {
 			return false, err
@@ -1146,49 +1157,49 @@ func (client *Client) ListVolumeTypes() ([]api.VolumeType, error) {
 //- volume the volume to attach
 //- vm the VM on which the volume is attached
 func (client *Client) CreateVolumeAttachment(request api.VolumeAttachmentRequest) (*api.VolumeAttachment, error) {
-	va, err := volumeattach.Create(client.nova, request.VM.ID, volumeattach.CreateOpts{
-		VolumeID: request.Volume.ID,
+	va, err := volumeattach.Create(client.nova, request.ServerID, volumeattach.CreateOpts{
+		VolumeID: request.VolumeID,
 	}).Extract()
 	if err != nil {
-		return nil, fmt.Errorf("Error creating volume attachement between server %s and volume: %s",request.VM.ID, request.Volume.ID errorString(err))
+		return nil, fmt.Errorf("Error creating volume attachement between server %s and volume %s: %s", request.ServerID, request.VolumeID, errorString(err))
 	}
-	
-	return & api.VolumeAttachment{
-		ID: va.ID,
+
+	return &api.VolumeAttachment{
+		ID:       va.ID,
 		ServerID: va.ServerID,
 		VolumeID: va.VolumeID,
-		Device: va.Device
+		Device:   va.Device,
 	}, nil
 }
 
 //GetVolumeAttachment returns the volume attachment identified by id
-func (client *Client) GetVolumeAttachment(id string) (*api.VolumeAttachment, error) {
-	va, err := volumeattach.Get(client.nova, id).Extract()
+func (client *Client) GetVolumeAttachment(serverID, id string) (*api.VolumeAttachment, error) {
+	va, err := volumeattach.Get(client.nova, serverID, id).Extract()
 	if err != nil {
-		return nil, fmt.Errorf("Error getting volume attachement %s: %s",id, errorString(err))
+		return nil, fmt.Errorf("Error getting volume attachement %s: %s", id, errorString(err))
 	}
-	return & api.VolumeAttachment{
-		ID: va.ID,
+	return &api.VolumeAttachment{
+		ID:       va.ID,
 		ServerID: va.ServerID,
 		VolumeID: va.VolumeID,
-		Device: va.Device
+		Device:   va.Device,
 	}, nil
 }
 
 //ListVolumeAttachments lists available volume attachment
-func (client *Client) ListVolumeAttachments() ([]api.VolumeAttachment, error) {
+func (client *Client) ListVolumeAttachments(serverID string) ([]api.VolumeAttachment, error) {
 	var vs []api.VolumeAttachment
-	err := volumeattach.List(client.nova, volumeattach.ListOpts{}).EachPage(func(page pagination.Page) (bool, error) {
+	err := volumeattach.List(client.nova, serverID).EachPage(func(page pagination.Page) (bool, error) {
 		list, err := volumeattach.ExtractVolumeAttachments(page)
 		if err != nil {
 			return false, err
 		}
 		for _, va := range list {
-			ava = api.VolumeAttachment{
-				ID: va.ID,
+			ava := api.VolumeAttachment{
+				ID:       va.ID,
 				ServerID: va.ServerID,
 				VolumeID: va.VolumeID,
-				Device: va.Device
+				Device:   va.Device,
 			}
 			vs = append(vs, ava)
 		}
@@ -1201,10 +1212,10 @@ func (client *Client) ListVolumeAttachments() ([]api.VolumeAttachment, error) {
 }
 
 //DeleteVolumeAttachment deletes the volume attachment identifed by id
-func (client *Client) DeleteVolumeAttachment(id string) error {
-	err := volumeattach.Delete(client.nova, id).ExtractErr()
+func (client *Client) DeleteVolumeAttachment(serverID, id string) error {
+	err := volumeattach.Delete(client.nova, serverID, id).ExtractErr()
 	if err != nil {
-		return nil, fmt.Errorf("Error deleting volume attachement %s: %s",id, errorString(err))
+		return fmt.Errorf("Error deleting volume attachement %s: %s", id, errorString(err))
 	}
 	return nil
 }

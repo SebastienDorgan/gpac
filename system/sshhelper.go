@@ -1,8 +1,10 @@
-package clients
+package system
 
 import (
 	"fmt"
 	"time"
+
+	"github.com/SebastienDorgan/gpac/clients"
 
 	"golang.org/x/crypto/ssh"
 
@@ -15,7 +17,7 @@ type SSHHelper struct {
 }
 
 //FromServerAccess construct a SSHHelper from a clients.ServerAccess
-func FromServerAccess(access *ServerAccess, timeout time.Duration) (*SSHHelper, error) {
+func FromServerAccess(access *clients.ServerAccess, timeout time.Duration) (*SSHHelper, error) {
 	cfg := easyssh.MakeConfig{
 		Server:  access.GetAccessIP(),
 		User:    access.User,
