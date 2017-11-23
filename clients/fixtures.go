@@ -276,7 +276,7 @@ func CreateServer(client api.ClientAPI, request ServerRequest) (*ServerAccess, e
 	vmReq := api.VMRequest{
 		Name:       request.Name,
 		ImageID:    img.ID,
-		KeyPairID:  kp.ID,
+		KeyPair:    kp,
 		PublicIP:   request.PublicIP,
 		NetworkIDs: netIds,
 		TemplateID: request.Template.ID,
@@ -288,7 +288,7 @@ func CreateServer(client api.ClientAPI, request ServerRequest) (*ServerAccess, e
 	return &ServerAccess{
 		VM:      vm,
 		Key:     kp,
-		User:    client.GetDefaultUser(),
+		User:    api.DefaultUser,
 		Gateway: request.Gateway,
 	}, nil
 }

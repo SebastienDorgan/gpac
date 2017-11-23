@@ -6,6 +6,9 @@ import (
 	"github.com/SebastienDorgan/gpac/clients/api/VolumeState"
 )
 
+//DefaultUser Default VM user
+const DefaultUser = "gpac"
+
 //TimeoutError defines a Timeout erroe
 type TimeoutError struct {
 	Message string
@@ -60,7 +63,7 @@ type VM struct {
 type VMRequest struct {
 	Name string `json:"name,omitempty"`
 	//KeyPairID ID of the key pair use to secure SSH connections with the VM
-	KeyPairID string `json:"key_pair_id,omitempty"`
+	KeyPair *KeyPair `json:"key_pair_id,omitempty"`
 	//NetworksIDs list of the network IDs the VM must be connected
 	NetworkIDs []string `json:"network_i_ds,omitempty"`
 	//PublicIP a flg telling if the VM must have a public IP is
@@ -69,6 +72,8 @@ type VMRequest struct {
 	TemplateID string `json:"template_id,omitempty"`
 	//ImageID  is the UUID of the image that contains the server's OS and initial state.
 	ImageID string `json:"image_id,omitempty"`
+	//User user is optionnal if not provided Client.DefautUser is used
+	User string `json:"user,omitempty"`
 }
 
 //Volume represents an block volume
@@ -116,6 +121,21 @@ type Image struct {
 	Name string `json:"name,omitempty"`
 }
 
+//RouterRequest represents a router request
+type RouterRequest struct {
+	Name string
+	//NetworkID is the Network ID which the router gateway is connected to.
+	NetworkID string
+}
+
+//Router represents a router
+type Router struct {
+	ID   string
+	Name string
+	//NetworkID is the Network ID which the router gateway is connected to.
+	NetworkID string
+}
+
 //Network representes a virtual network
 type Network struct {
 	ID   string `json:"id,omitempty"`
@@ -151,10 +171,7 @@ type SubnetRequets struct {
 
 //ClientAPI is an API defining an IaaS driver
 type ClientAPI interface {
-	//SetDefaultUser set the default user
-	SetDefaultUser(user string)
-	//GetDefaultUser returns server default user
-	GetDefaultUser() string
+
 	//ListImages lists available OS images
 	ListImages() ([]Image, error)
 	//GetImage returns the Image referenced by id
@@ -173,6 +190,15 @@ type ClientAPI interface {
 	ListKeyPairs() ([]KeyPair, error)
 	//DeleteKeyPair deletes the key pair identified by id
 	DeleteKeyPair(id string) error
+
+	//CreateNetwork creates a network named name
+	CreateRouter(req RouterRequest) (*Router, error)
+	//GetNetwork returns the network identified by id
+	GetRouter(id string) (*Router, error)
+	//ListNetworks lists available networks
+	ListRouter() ([]Router, error)
+	//DeleteNetwork deletes the network identified by id
+	DeleteRouter(id string) error
 
 	//CreateNetwork creates a network named name
 	CreateNetwork(name string) (*Network, error)

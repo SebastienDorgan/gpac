@@ -15,4 +15,4 @@
 .idea/workspace.xml
 
 #remove client tests
-client_test.go
+*_test.go
