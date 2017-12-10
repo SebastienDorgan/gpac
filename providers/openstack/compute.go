@@ -5,15 +5,20 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/gob"
 	"encoding/pem"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/SebastienDorgan/gpac/clients"
-	"github.com/SebastienDorgan/gpac/clients/api"
-	"github.com/SebastienDorgan/gpac/clients/api/IPVersion"
-	"github.com/SebastienDorgan/gpac/clients/api/VMState"
+	uuid "github.com/satori/go.uuid"
+
+	"github.com/SebastienDorgan/gpac/providers"
+	"github.com/SebastienDorgan/gpac/system"
+
+	"github.com/SebastienDorgan/gpac/providers/api"
+	"github.com/SebastienDorgan/gpac/providers/api/IPVersion"
+	"github.com/SebastienDorgan/gpac/providers/api/VMState"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/floatingip"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/keypairs"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/startstop"
@@ -29,7 +34,7 @@ func (client *Client) ListImages() ([]api.Image, error) {
 	opts := images.ListOpts{}
 
 	// Retrieve a pager (i.e. a paginated collection)
-	pager := images.List(client.nova, opts)
+	pager := images.List(client.Compute, opts)
 
 	var imgList []api.Image
 
@@ -56,7 +61,7 @@ func (client *Client) ListImages() ([]api.Image, error) {
 
 //GetImage returns the Image referenced by id
 func (client *Client) GetImage(id string) (*api.Image, error) {
-	img, err := images.Get(client.nova, id).Extract()
+	img, err := images.Get(client.Compute, id).Extract()
 	if err != nil {
 		return nil, fmt.Errorf("Error getting image: %s", errorString(err))
 	}
@@ -65,7 +70,7 @@ func (client *Client) GetImage(id string) (*api.Image, error) {
 
 //GetTemplate returns the Template referenced by id
 func (client *Client) GetTemplate(id string) (*api.VMTemplate, error) {
-	flv, err := flavors.Get(client.nova, id).Extract()
+	flv, err := flavors.Get(client.Compute, id).Extract()
 	if err != nil {
 		return nil, fmt.Errorf("Error getting template: %s", errorString(err))
 	}
@@ -86,7 +91,7 @@ func (client *Client) ListTemplates() ([]api.VMTemplate, error) {
 	opts := flavors.ListOpts{}
 
 	// Retrieve a pager (i.e. a paginated collection)
-	pager := flavors.ListDetail(client.nova, opts)
+	pager := flavors.ListDetail(client.Compute, opts)
 
 	var flvList []api.VMTemplate
 
@@ -136,7 +141,7 @@ func (client *Client) CreateKeyPair(name string) (*api.KeyPair, error) {
 	)
 	priKey := string(priKeyPem)
 
-	kp, err := keypairs.Create(client.nova, keypairs.CreateOpts{
+	kp, err := keypairs.Create(client.Compute, keypairs.CreateOpts{
 		Name:      name,
 		PublicKey: pubKey,
 	}).Extract()
@@ -153,7 +158,7 @@ func (client *Client) CreateKeyPair(name string) (*api.KeyPair, error) {
 
 //GetKeyPair returns the key pair identified by id
 func (client *Client) GetKeyPair(id string) (*api.KeyPair, error) {
-	kp, err := keypairs.Get(client.nova, id).Extract()
+	kp, err := keypairs.Get(client.Compute, id).Extract()
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +174,7 @@ func (client *Client) GetKeyPair(id string) (*api.KeyPair, error) {
 func (client *Client) ListKeyPairs() ([]api.KeyPair, error) {
 
 	// Retrieve a pager (i.e. a paginated collection)
-	pager := keypairs.List(client.nova)
+	pager := keypairs.List(client.Compute)
 
 	var kpList []api.KeyPair
 
@@ -201,7 +206,7 @@ func (client *Client) ListKeyPairs() ([]api.KeyPair, error) {
 
 //DeleteKeyPair deletes the key pair identified by id
 func (client *Client) DeleteKeyPair(id string) error {
-	err := keypairs.Delete(client.nova, id).ExtractErr()
+	err := keypairs.Delete(client.Compute, id).ExtractErr()
 	if err != nil {
 		return fmt.Errorf("Error deleting key pair: %s", errorString(err))
 	}
@@ -245,7 +250,7 @@ func toVMState(status string) VMState.Enum {
 func (client *Client) convertAdresses(addresses map[string]interface{}) map[IPVersion.Enum][]string {
 	addrs := make(map[IPVersion.Enum][]string)
 	for n, obj := range addresses {
-		if n == client.Opts.ProviderNetwork {
+		if n == client.Cfg.ProviderNetwork {
 			break
 		}
 		for _, networkAddresses := range obj.([]interface{}) {
@@ -266,6 +271,7 @@ func (client *Client) convertAdresses(addresses map[string]interface{}) map[IPVe
 //toVM converts an OpenStack server into api VM
 func (client *Client) toVM(server *servers.Server) *api.VM {
 	adresses := client.convertAdresses(server.Addresses)
+
 	vm := api.VM{
 		ID:           server.ID,
 		Name:         server.Name,
@@ -276,78 +282,220 @@ func (client *Client) toVM(server *servers.Server) *api.VM {
 		Size:         client.toVMSize(server.Flavor),
 		State:        toVMState(server.Status),
 	}
+	vmDef, err := client.readVMDefinition(server.ID)
+	if err == nil {
+		vm.GatewayID = vmDef.GatewayID
+		vm.PrivateKey = vmDef.PrivateKey
+		//Floating IP management
+		if vm.AccessIPv4 == "" {
+			vm.AccessIPv4 = vmDef.AccessIPv4
+		}
+		if vm.AccessIPv6 == "" {
+			vm.AccessIPv6 = vmDef.AccessIPv6
+		}
+
+	}
 	return &vm
+}
+
+//Data structure to apply to userdata.sh template
+type userData struct {
+	//Name of the default user (api.DefaultUser)
+	User string
+	//Private key used to create the VM
+	Key string
+	//If true configure all interfaces to DHCP
+	ConfIF bool
+	//If true activate IP frowarding
+	IsGateway bool
+	//If true configure default gateway
+	AddGateway bool
+	//Content of the /etc/resolve.conf of the Gateway
+	//Used only if IsGateway is true
+	ResolveConf string
+	//IP of the gateway
+	GatewayIP string
+}
+
+func (client *Client) prepareUserData(request api.VMRequest, kp *api.KeyPair, gw *servers.Server) ([]byte, error) {
+	dataBuffer := bytes.NewBufferString("")
+	var gwIP string
+	var ResolveConf string
+	var err error
+	if !request.PublicIP {
+		gwIP = gw.AccessIPv4
+		if gwIP == "" {
+			gwIP = gw.AccessIPv6
+		}
+		var buffer bytes.Buffer
+		for _, dns := range client.Cfg.DNSList {
+			buffer.WriteString(fmt.Sprintf("nameserver %s\n", dns))
+		}
+		ResolveConf = buffer.String()
+	}
+
+	data := userData{
+		User:        api.DefaultUser,
+		Key:         strings.Trim(kp.PublicKey, "\n"),
+		ConfIF:      !client.Cfg.AutoVMNetworkInterfaces,
+		IsGateway:   request.IsGateway && !client.Cfg.UseLayer3Networking,
+		AddGateway:  request.PublicIP && !client.Cfg.UseLayer3Networking,
+		ResolveConf: ResolveConf,
+		GatewayIP:   gwIP,
+	}
+	err = client.UserDataTpl.Execute(dataBuffer, data)
+	if err != nil {
+		return nil, err
+	}
+	return dataBuffer.Bytes(), nil
+}
+
+func (client *Client) readGateway(networkID string) (*servers.Server, error) {
+	gwID, err := client.getGateway(networkID)
+	if err != nil {
+		return nil, fmt.Errorf("Error creating VM: Enable to found Gateway %s", errorString(err))
+	}
+	gw, err := servers.Get(client.Compute, gwID).Extract()
+	if err != nil {
+		return nil, fmt.Errorf("Error creating VM: Enable to found Gateway %s", errorString(err))
+	}
+	return gw, nil
+}
+
+func (client *Client) saveVMDefinition(vm api.VM) error {
+	var buffer bytes.Buffer
+	enc := gob.NewEncoder(&buffer)
+	err := enc.Encode(vm)
+	if err != nil {
+		return err
+	}
+	return client.PutObject("__vms__", api.Object{
+		Name:    vm.ID,
+		Content: bytes.NewReader(buffer.Bytes()),
+	})
+}
+func (client *Client) removeVMDefinition(vmID string) error {
+	return client.DeleteObject("__vms__", vmID)
+}
+func (client *Client) readVMDefinition(vmID string) (*api.VM, error) {
+	o, err := client.GetObject("__vms__", vmID, nil)
+	if err != nil {
+		return nil, err
+	}
+	var buffer bytes.Buffer
+	buffer.ReadFrom(o.Content)
+	enc := gob.NewDecoder(&buffer)
+	var vm api.VM
+	err = enc.Decode(&vm)
+	if err != nil {
+		return nil, err
+	}
+	return &vm, nil
 }
 
 //CreateVM creates a VM satisfying request
 func (client *Client) CreateVM(request api.VMRequest) (*api.VM, error) {
 	//Prepare network list
+	mainNetID := request.NetworkIDs[0]
+
 	var nets []servers.Network
+	//If floating IPs are not used and VM is public
+	//then add provider network to VM networks
+	if !client.Cfg.UseFloatingIP && request.PublicIP {
+		nets = append(nets, servers.Network{
+			UUID: client.ProviderNetworkID,
+		})
+	}
+	//Add private networks
 	for _, n := range request.NetworkIDs {
 		nets = append(nets, servers.Network{
 			UUID: n,
 		})
 	}
 
-	//Prepare user data
-	dataBuffer := bytes.NewBufferString("")
-	type Data struct {
-		User, Key string
+	//Prepare key pair
+	kp := request.KeyPair
+	var err error
+	if kp == nil {
+		id := uuid.NewV4()
+		name := fmt.Sprintf("%s_%s", request.Name, id)
+		kp, err = client.CreateKeyPair(name)
+		if err != nil {
+			return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
+		}
+		defer client.DeleteKeyPair(kp.ID)
 	}
-	data := Data{
-		User: api.DefaultUser,
-		Key:  strings.Trim(request.KeyPair.PublicKey, "\n"),
-	}
-	fmt.Println(data.Key)
-	err := client.userDataTpl.Execute(dataBuffer, data)
+
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println(dataBuffer.String())
+	var gw *servers.Server
+	if !request.PublicIP {
+		gw, err = client.readGateway(mainNetID)
+		if err != nil {
+			return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
+		}
+	}
+	userData, err := client.prepareUserData(request, kp, gw)
+
 	//Create VM
 	srvOpts := servers.CreateOpts{
 		Name:           request.Name,
-		SecurityGroups: []string{client.securityGroup.Name},
+		SecurityGroups: []string{client.SecurityGroup.Name},
 		Networks:       nets,
 		FlavorRef:      request.TemplateID,
 		ImageRef:       request.ImageID,
-		UserData:       dataBuffer.Bytes(),
+		UserData:       userData,
 	}
-	server, err := servers.Create(client.nova, keypairs.CreateOptsExt{
+	server, err := servers.Create(client.Compute, keypairs.CreateOptsExt{
 		CreateOptsBuilder: srvOpts,
-		KeyName:           request.KeyPair.ID,
+		KeyName:           kp.ID,
 	}).Extract()
 	if err != nil {
 		return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
 	}
-
 	//Wait that VM is started
-	vm, err := clients.WaitVMState(client, server.ID, VMState.STARTED, 120*time.Second)
+	service := providers.Service{
+		ClientAPI: client,
+	}
+	vm, err := service.WaitVMState(server.ID, VMState.STARTED, 120*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("Timeout creating VM: %s", errorString(err))
 	}
-	//Not use Floating IP or no public address requested
-	if !client.Opts.UseFloatingIP || !request.PublicIP {
+	//Add gateway ID to VM definition
+	var gwID string
+	if gw != nil {
+		gwID = gw.ID
+	}
+	vm.GatewayID = gwID
+	vm.PrivateKey = kp.PrivateKey
+	//if Not use Floating IP or no public address requested
+	if !client.Cfg.UseFloatingIP || !request.PublicIP {
+		err = client.saveVMDefinition(*vm)
+		if err != nil {
+			client.DeleteVM(vm.ID)
+			return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
+		}
 		return vm, nil
 	}
 
 	//Create the floating IP
-	ip, err := floatingip.Create(client.nova, floatingip.CreateOpts{
+	ip, err := floatingip.Create(client.Compute, floatingip.CreateOpts{
 		Pool: client.Opts.FloatingIPPool,
 	}).Extract()
 	if err != nil {
-		servers.Delete(client.nova, vm.ID)
+		servers.Delete(client.Compute, vm.ID)
 		return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
 	}
 
 	//Associate floating IP to VM
-	err = floatingip.AssociateInstance(client.nova, floatingip.AssociateOpts{
+	err = floatingip.AssociateInstance(client.Compute, floatingip.AssociateOpts{
 		FloatingIP: ip.IP,
 		ServerID:   vm.ID,
 	}).ExtractErr()
 	if err != nil {
-		floatingip.Delete(client.nova, ip.ID)
-		servers.Delete(client.nova, vm.ID)
+		floatingip.Delete(client.Compute, ip.ID)
+		servers.Delete(client.Compute, vm.ID)
 		return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
 	}
 
@@ -356,23 +504,28 @@ func (client *Client) CreateVM(request api.VMRequest) (*api.VM, error) {
 	} else if IPVersion.IPv6.Is(ip.IP) {
 		vm.AccessIPv6 = ip.IP
 	}
+	err = client.saveVMDefinition(*vm)
+	if err != nil {
+		client.DeleteVM(vm.ID)
+		return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
+	}
+
 	return vm, nil
 
 }
 
 //GetVM returns the VM identified by id
 func (client *Client) GetVM(id string) (*api.VM, error) {
-	server, err := servers.Get(client.nova, id).Extract()
+	server, err := servers.Get(client.Compute, id).Extract()
 	if err != nil {
 		return nil, fmt.Errorf("Error getting VM: %s", errorString(err))
 	}
-	fmt.Println(server.Status)
 	return client.toVM(server), nil
 }
 
 //ListVMs lists available VMs
 func (client *Client) ListVMs() ([]api.VM, error) {
-	pager := servers.List(client.nova, servers.ListOpts{})
+	pager := servers.List(client.Compute, servers.ListOpts{})
 	var vms []api.VM
 	err := pager.EachPage(func(page pagination.Page) (bool, error) {
 		list, err := servers.ExtractServers(page)
@@ -394,7 +547,7 @@ func (client *Client) ListVMs() ([]api.VM, error) {
 //getFloatingIP returns the floating IP associated with the VM identified by vmID
 //By convention only one floating IP is allocated to a VM
 func (client *Client) getFloatingIP(vmID string) (*floatingip.FloatingIP, error) {
-	pager := floatingip.List(client.nova)
+	pager := floatingip.List(client.Compute)
 	var fips []floatingip.FloatingIP
 	err := pager.EachPage(func(page pagination.Page) (bool, error) {
 		list, err := floatingip.ExtractFloatingIPs(page)
@@ -424,25 +577,26 @@ func (client *Client) getFloatingIP(vmID string) (*floatingip.FloatingIP, error)
 
 //DeleteVM deletes the VM identified by id
 func (client *Client) DeleteVM(id string) error {
-	if client.Opts.UseFloatingIP {
+	client.readVMDefinition(id)
+	if client.Cfg.UseFloatingIP {
 		fip, err := client.getFloatingIP(id)
 		if err == nil {
 			if fip != nil {
-				err = floatingip.DisassociateInstance(client.nova, floatingip.AssociateOpts{
+				err = floatingip.DisassociateInstance(client.Compute, floatingip.AssociateOpts{
 					ServerID:   id,
 					FloatingIP: fip.IP,
 				}).ExtractErr()
 				if err != nil {
 					return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
 				}
-				err = floatingip.Delete(client.nova, fip.ID).ExtractErr()
+				err = floatingip.Delete(client.Compute, fip.ID).ExtractErr()
 				if err != nil {
 					return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
 				}
 			}
 		}
 	}
-	err := servers.Delete(client.nova, id).ExtractErr()
+	err := servers.Delete(client.Compute, id).ExtractErr()
 	if err != nil {
 		return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
 	}
@@ -451,7 +605,7 @@ func (client *Client) DeleteVM(id string) error {
 
 //StopVM stops the VM identified by id
 func (client *Client) StopVM(id string) error {
-	err := startstop.Stop(client.nova, id).ExtractErr()
+	err := startstop.Stop(client.Compute, id).ExtractErr()
 	if err != nil {
 		return fmt.Errorf("Error stoping VM : %s", errorString(err))
 	}
@@ -460,9 +614,48 @@ func (client *Client) StopVM(id string) error {
 
 //StartVM starts the VM identified by id
 func (client *Client) StartVM(id string) error {
-	err := startstop.Start(client.nova, id).ExtractErr()
+	err := startstop.Start(client.Compute, id).ExtractErr()
 	if err != nil {
 		return fmt.Errorf("Error stoping VM : %s", errorString(err))
 	}
 	return nil
+}
+
+func (client *Client) getSSHConfig(vm *api.VM) (*system.SSHConfig, error) {
+
+	ip := vm.GetAccessIP()
+	sshConfig := system.SSHConfig{
+		PrivateKey:         vm.PrivateKey,
+		Port:               22,
+		Host:               ip,
+		ConnecttionTimeout: 30 * time.Second,
+		User:               api.DefaultUser,
+	}
+	if vm.GatewayID != "" {
+		gw, err := client.GetVM(vm.GatewayID)
+		if err != nil {
+			return nil, err
+		}
+		ip := gw.GetAccessIP()
+		GatewayConfig := system.SSHConfig{
+			PrivateKey:         gw.PrivateKey,
+			Port:               22,
+			ConnecttionTimeout: 30 * time.Second,
+			User:               api.DefaultUser,
+			Host:               ip,
+		}
+		sshConfig.GatewayConfig = &GatewayConfig
+	}
+
+	return &sshConfig, nil
+
+}
+
+//GetSSHConfig creates SSHConfig to connect a VM
+func (client *Client) GetSSHConfig(id string) (*system.SSHConfig, error) {
+	vm, err := client.GetVM(id)
+	if err != nil {
+		return nil, err
+	}
+	return client.getSSHConfig(vm)
 }

@@ -1,7 +1,10 @@
 package ovh
 
 import (
-	"github.com/SebastienDorgan/gpac/clients/openstack"
+	"github.com/SebastienDorgan/gpac/providers/openstack"
+
+	"github.com/SebastienDorgan/gpac/providers/api/VolumeSpeed"
+
 	"github.com/ovh/go-ovh/ovh"
 )
 
@@ -18,7 +21,6 @@ type AuthOptions struct {
 	ApplicationName string
 	//Application Key or project ID
 	ApplicationKey string
-
 	//Consumer key
 	ConsumerKey string
 	//Openstack identifier
@@ -27,11 +29,6 @@ type AuthOptions struct {
 	OpenstackPassword string
 	//Name of the data center (GRA3, BHS3 ...)
 	Region string
-
-	//Name of the provider (external) network
-	ProviderNetwork string
-	//Default user for the VM
-	DefaultUser string
 }
 
 // func parseOpenRC(openrc string) (*openstack.AuthOptions, error) {
@@ -47,15 +44,30 @@ func AuthenticatedClient(opts AuthOptions) (*Client, error) {
 	}
 	client.ovh = c
 	os, err := openstack.AuthenticatedClient(openstack.AuthOptions{
-		IdentityEndpoint: "https://auth.cloud.ovh.net/v2.0/tokens",
-		UserID:           opts.OpenstackID,
-		Password:         opts.OpenstackPassword,
-		TenantID:         opts.ApplicationKey,
-	})
+		IdentityEndpoint: "https://auth.cloud.ovh.net/v2.0",
+		//UserID:           opts.OpenstackID,
+		Username: opts.OpenstackID,
+		Password: opts.OpenstackPassword,
+		TenantID: opts.ApplicationKey,
+		Region:   opts.Region,
+	},
+		openstack.CfgOptions{
+			ProviderNetwork:         "Ext-Net",
+			UseFloatingIP:           false,
+			UseLayer3Networking:     false,
+			AutoVMNetworkInterfaces: false,
+			VolumeSpeeds: map[string]VolumeSpeed.Enum{
+				"classic":    VolumeSpeed.COLD,
+				"high-speed": VolumeSpeed.HDD,
+			},
+		},
+	)
+
 	if err != nil {
 		return nil, err
 	}
 	client.Client = os
+	client.CreateContainer("__router__", nil)
 	return client, nil
 
 }
@@ -63,7 +75,7 @@ func AuthenticatedClient(opts AuthOptions) (*Client, error) {
 //Client is the implementation of the ovh driver regarding to the api.ClientAPI
 //This client used ovh api and opensatck ovh api to maximize code reuse
 type Client struct {
-	opts AuthOptions
 	*openstack.Client
-	ovh *ovh.Client
+	opts AuthOptions
+	ovh  *ovh.Client
 }

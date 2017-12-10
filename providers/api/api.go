@@ -1,9 +1,16 @@
 package api
 
 import (
-	"github.com/SebastienDorgan/gpac/clients/api/IPVersion"
-	"github.com/SebastienDorgan/gpac/clients/api/VMState"
-	"github.com/SebastienDorgan/gpac/clients/api/VolumeState"
+	"fmt"
+	"io"
+	"time"
+
+	"github.com/SebastienDorgan/gpac/system"
+
+	"github.com/SebastienDorgan/gpac/providers/api/IPVersion"
+	"github.com/SebastienDorgan/gpac/providers/api/VMState"
+	"github.com/SebastienDorgan/gpac/providers/api/VolumeSpeed"
+	"github.com/SebastienDorgan/gpac/providers/api/VolumeState"
 )
 
 //DefaultUser Default VM user
@@ -51,19 +58,35 @@ type SizingRequirements struct {
 type VM struct {
 	ID           string       `json:"id,omitempty"`
 	Name         string       `json:"name,omitempty"`
-	PrivateIPsV4 []string     `json:"private_i_ps_v_4,omitempty"`
-	PrivateIPsV6 []string     `json:"private_i_ps_v_6,omitempty"`
-	AccessIPv4   string       `json:"access_i_pv_4,omitempty"`
-	AccessIPv6   string       `json:"access_i_pv_6,omitempty"`
+	PrivateIPsV4 []string     `json:"private_ips_v4,omitempty"`
+	PrivateIPsV6 []string     `json:"private_ips_v6,omitempty"`
+	AccessIPv4   string       `json:"access_ip_v4,omitempty"`
+	AccessIPv6   string       `json:"access_ip_v6,omitempty"`
 	Size         VMSize       `json:"size,omitempty"`
 	State        VMState.Enum `json:"state,omitempty"`
+	PrivateKey   string       `json:"private_key,omitempty"`
+	GatewayID    string       `json:"gateway_id,omitempty"`
+}
+
+//GetAccessIP compues access IP of the VM
+func (vm *VM) GetAccessIP() string {
+	ip := vm.AccessIPv4
+	if ip == "" {
+		ip = vm.AccessIPv6
+	}
+	if ip == "" {
+		if len(vm.PrivateIPsV4) > 0 {
+			ip = vm.PrivateIPsV4[0]
+		} else {
+			ip = vm.PrivateIPsV6[0]
+		}
+	}
+	return ip
 }
 
 //VMRequest represents requirements to create virtual machine properties
 type VMRequest struct {
 	Name string `json:"name,omitempty"`
-	//KeyPairID ID of the key pair use to secure SSH connections with the VM
-	KeyPair *KeyPair `json:"key_pair_id,omitempty"`
 	//NetworksIDs list of the network IDs the VM must be connected
 	NetworkIDs []string `json:"network_i_ds,omitempty"`
 	//PublicIP a flg telling if the VM must have a public IP is
@@ -71,9 +94,9 @@ type VMRequest struct {
 	//TemplateID the UUID of the template used to size the VM (see SelectTemplates)
 	TemplateID string `json:"template_id,omitempty"`
 	//ImageID  is the UUID of the image that contains the server's OS and initial state.
-	ImageID string `json:"image_id,omitempty"`
-	//User user is optionnal if not provided Client.DefautUser is used
-	User string `json:"user,omitempty"`
+	ImageID   string   `json:"image_id,omitempty"`
+	KeyPair   *KeyPair `json:"key_pair,omitempty"`
+	IsGateway bool     `json:"is_gateway,omitempty"`
 }
 
 //Volume represents an block volume
@@ -81,22 +104,15 @@ type Volume struct {
 	ID    string           `json:"id,omitempty"`
 	Name  string           `json:"name,omitempty"`
 	Size  int              `json:"size,omitempty"`
-	Type  string           `json:"type,omitempty"`
+	Speed VolumeSpeed.Enum `json:"speed,omitempty"`
 	State VolumeState.Enum `json:"state,omitempty"`
 }
 
 //VolumeRequest represents a volume request
 type VolumeRequest struct {
-	Name string `json:"name,omitempty"`
-	Size int    `json:"size,omitempty"`
-	Type string `json:"type,omitempty"`
-}
-
-//VolumeType represents a volume type
-type VolumeType struct {
-	ID          string `json:"id,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
+	Name  string           `json:"name,omitempty"`
+	Size  int              `json:"size,omitempty"`
+	Speed VolumeSpeed.Enum `json:"speed,omitempty"`
 }
 
 //VolumeAttachment represents an volume attachment
@@ -121,29 +137,36 @@ type Image struct {
 	Name string `json:"name,omitempty"`
 }
 
+/*
 //RouterRequest represents a router request
 type RouterRequest struct {
-	Name string
+	Name string `json:"name,omitempty"`
 	//NetworkID is the Network ID which the router gateway is connected to.
-	NetworkID string
+	NetworkID string `json:"network_id,omitempty"`
 }
 
 //Router represents a router
 type Router struct {
-	ID   string
-	Name string
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
 	//NetworkID is the Network ID which the router gateway is connected to.
-	NetworkID string
+	NetworkID string `json:"network_id,omitempty"`
 }
+*/
 
 //Network representes a virtual network
 type Network struct {
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
-	// IDs of the Subnets associated with this network.
-	Subnets []string `json:"subnets,omitempty"`
+	//IPVersion is IPv4 or IPv6 (see IPVersion)
+	IPVersion IPVersion.Enum `json:"ip_version,omitempty"`
+	//Mask mask in CIDR notation
+	CIDR string `json:"mask,omitempty"`
+	//Gateway network gateway
+	GatewayID string
 }
 
+/*
 //Subnet represents a sub network where Mask is defined in CIDR notation
 //like "192.0.2.0/24" or "2001:db8::/32", as defined in RFC 4632 and RFC 4291.
 type Subnet struct {
@@ -156,17 +179,60 @@ type Subnet struct {
 	//NetworkID id of the parent network
 	NetworkID string `json:"network_id,omitempty"`
 }
+*/
 
-//SubnetRequets represents sub network requirements to create a subnet where Mask is defined in CIDR notation
+//NetworkRequest represents network requirements to create a subnet where Mask is defined in CIDR notation
 //like "192.0.2.0/24" or "2001:db8::/32", as defined in RFC 4632 and RFC 4291.
-type SubnetRequets struct {
+type NetworkRequest struct {
 	Name string `json:"name,omitempty"`
 	//IPVersion must be IPv4 or IPv6 (see IPVersion)
 	IPVersion IPVersion.Enum `json:"ip_version,omitempty"`
-	//Mask mask in CIDR notation
-	Mask string `json:"mask,omitempty"`
-	//NetworkID id of the parent network
-	NetworkID string `json:"network_id,omitempty"`
+	//CIDR mask
+	CIDR string `json:"cidr,omitempty"`
+	//gwDefinition gateway of this netwok
+	GWRequest VMRequest
+}
+
+//Object object to put in a container
+type Object struct {
+	Name          string            `json:"name,omitempty"`
+	Content       io.ReadSeeker     `json:"content,omitempty"`
+	DeleteAt      time.Time         `json:"delete_at,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	Date          time.Time         `json:"date,omitempty"`
+	LastModified  time.Time         `json:"last_modified,omitempty"`
+	ContentType   string            `json:"content_type,omitempty"`
+	ContentLength int64             `json:"content_length,omitempty"`
+}
+
+//ObjectFilter filter object
+type ObjectFilter struct {
+	Prefix string `json:"prefix,omitempty"`
+	Path   string `json:"path,omitempty"`
+}
+
+//Range Defines a range of bytes
+type Range struct {
+	From *int `json:"from,omitempty"`
+	To   *int `json:"to,omitempty"`
+}
+
+//NewRange creates a range
+func NewRange(from, to int) Range {
+	return Range{&from, &to}
+}
+
+func (r Range) String() string {
+	if r.From != nil && r.To != nil {
+		return fmt.Sprintf("%d-%d", *r.From, *r.To)
+	}
+	if r.From != nil {
+		return fmt.Sprintf("%d-", *r.From)
+	}
+	if r.To != nil {
+		return fmt.Sprintf("%d", *r.To)
+	}
+	return ""
 }
 
 //ClientAPI is an API defining an IaaS driver
@@ -192,34 +258,13 @@ type ClientAPI interface {
 	DeleteKeyPair(id string) error
 
 	//CreateNetwork creates a network named name
-	CreateRouter(req RouterRequest) (*Router, error)
-	//GetNetwork returns the network identified by id
-	GetRouter(id string) (*Router, error)
-	//ListNetworks lists available networks
-	ListRouter() ([]Router, error)
-	//DeleteNetwork deletes the network identified by id
-	DeleteRouter(id string) error
-
-	//CreateNetwork creates a network named name
-	CreateNetwork(name string) (*Network, error)
+	CreateNetwork(req NetworkRequest) (*Network, error)
 	//GetNetwork returns the network identified by id
 	GetNetwork(id string) (*Network, error)
 	//ListNetworks lists available networks
 	ListNetworks() ([]Network, error)
 	//DeleteNetwork deletes the network identified by id
 	DeleteNetwork(id string) error
-
-	//CreateSubnet creates a sub network
-	//- netID ID of the parent network
-	//- name is the name of the sub network
-	//- mask is a network mask defined in CIDR notation
-	CreateSubnet(request SubnetRequets) (*Subnet, error)
-	//GetSubnet returns the sub network identified by id
-	GetSubnet(id string) (*Subnet, error)
-	//ListSubnets lists available sub networks of network net
-	ListSubnets(netID string) ([]Subnet, error)
-	//DeleteSubnet deletes the sub network identified by id
-	DeleteSubnet(id string) error
 
 	//CreateVM creates a VM that fulfils the request
 	CreateVM(request VMRequest) (*VM, error)
@@ -233,6 +278,8 @@ type ClientAPI interface {
 	StopVM(id string) error
 	//StartVM starts the VM identified by id
 	StartVM(id string) error
+	//GetSSHConfig creates SSHConfig from VM
+	GetSSHConfig(id string) (*system.SSHConfig, error)
 
 	//CreateVolume creates a block volume
 	//- name is the name of the volume
@@ -245,8 +292,6 @@ type ClientAPI interface {
 	ListVolumes() ([]Volume, error)
 	//DeleteVolume deletes the volume identified by id
 	DeleteVolume(id string) error
-	//ListVolumeTypes list volume types available
-	ListVolumeTypes() ([]VolumeType, error)
 
 	//CreateVolumeAttachment attaches a volume to a VM
 	//- name the name of the volume attachment
@@ -259,4 +304,30 @@ type ClientAPI interface {
 	ListVolumeAttachments(serverID string) ([]VolumeAttachment, error)
 	//DeleteVolumeAttachment deletes the volume attachment identifed by id
 	DeleteVolumeAttachment(serverID, id string) error
+
+	//CreateContainer creates an object container
+	CreateContainer(name string, meta map[string]string) error
+	//DeleteContainer deletes an object container
+	DeleteContainer(name string) error
+	//UpdateContainer updates an object container
+	UpdateContainer(name string, meta map[string]string) error
+	//ListContainers list object containers
+	ListContainers() ([]string, error)
+	//GetContainerMetadata get an object container metadata
+	GetContainerMetadata(name string) (map[string]string, error)
+
+	//PutObject put an object into an object container
+	PutObject(container string, obj Object) error
+	//UpdateObjectMetadata update an object into  object container
+	UpdateObjectMetadata(container string, obj Object) error
+	//GetObject get  object content from an object container
+	GetObject(container string, name string, ranges []Range) (*Object, error)
+	//GetObjectMetadata get  object metadata from an object container
+	GetObjectMetadata(container string, name string) (*Object, error)
+	//ListObjects list objects of a container
+	ListObjects(container string, filter ObjectFilter) ([]string, error)
+	//CopyObject copies an object
+	CopyObject(containerSrc, objectSrc, objectDst string) error
+	//DeleteObject deleta an object from a container
+	DeleteObject(container, object string) error
 }

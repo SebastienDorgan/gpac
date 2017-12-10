@@ -1,4 +1,4 @@
-package clients
+package providers
 
 import (
 	"fmt"
@@ -6,16 +6,61 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SebastienDorgan/gpac/clients/api/VolumeState"
-
-	"github.com/satori/go.uuid"
+	"github.com/SebastienDorgan/gpac/providers/api"
+	"github.com/SebastienDorgan/gpac/providers/api/VMState"
+	"github.com/SebastienDorgan/gpac/providers/api/VolumeState"
+	uuid "github.com/satori/go.uuid"
 
 	"github.com/xrash/smetrics"
-
-	"github.com/SebastienDorgan/gpac/clients/api"
-	"github.com/SebastienDorgan/gpac/clients/api/IPVersion"
-	"github.com/SebastienDorgan/gpac/clients/api/VMState"
 )
+
+//ResourceError resource error
+type ResourceError struct {
+	Name         string
+	ResourceType string
+}
+
+//ResourceNotFound resource not found error
+type ResourceNotFound struct {
+	ResourceError
+}
+
+//ResourceNotFoundError creates a ResourceNotFound error
+func ResourceNotFoundError(resource string, name string) ResourceNotFound {
+	return ResourceNotFound{
+		ResourceError{
+			Name:         name,
+			ResourceType: resource,
+		},
+	}
+}
+func (e ResourceNotFound) Error() string {
+	return fmt.Sprintf("Unable to find %s %s", e.ResourceType, e.Name)
+}
+
+//ResourceAlreadyExists resource already exists error
+type ResourceAlreadyExists struct {
+	ResourceError
+}
+
+//ResourceAlreadyExistsError creates a ResourceAlreadyExists error
+func ResourceAlreadyExistsError(resource string, name string) ResourceAlreadyExists {
+	return ResourceAlreadyExists{
+		ResourceError{
+			Name:         name,
+			ResourceType: resource,
+		},
+	}
+}
+
+func (e ResourceAlreadyExists) Error() string {
+	return fmt.Sprintf("%s %s alredy exists", e.ResourceType, e.Name)
+}
+
+//Service Client High level service
+type Service struct {
+	api.ClientAPI
+}
 
 const (
 	//CoreDRFWeight is the Dominant Resource Fairness weight of a core
@@ -42,16 +87,16 @@ func (a ByRankDRF) Len() int           { return len(a) }
 func (a ByRankDRF) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByRankDRF) Less(i, j int) bool { return RankDRF(&a[i]) < RankDRF(&a[j]) }
 
-//ServerAccess a VM and the SSH Key Pair
-type ServerAccess struct {
+//VMAccess a VM and the SSH Key Pair
+type VMAccess struct {
 	VM      *api.VM
 	Key     *api.KeyPair
 	User    string
-	Gateway *ServerAccess
+	Gateway *VMAccess
 }
 
 //GetAccessIP returns the access IP
-func (access *ServerAccess) GetAccessIP() string {
+func (access *VMAccess) GetAccessIP() string {
 	ip := access.VM.AccessIPv4
 	if len(ip) == 0 {
 		ip = access.VM.AccessIPv6
@@ -71,16 +116,16 @@ type ServerRequest struct {
 	//ImageID  is the UUID of the image that contains the server's OS and initial state.
 	OSName string `json:"os_name,omitempty"`
 	//Gateway through which the server can be connected
-	Gateway *ServerAccess
+	Gateway *VMAccess `json:"gateway,omitempty"`
 }
 
 //WaitVMState waits a vm achieve state
-func WaitVMState(client api.ClientAPI, vmID string, state VMState.Enum, timeout time.Duration) (*api.VM, error) {
+func (srv *Service) WaitVMState(vmID string, state VMState.Enum, timeout time.Duration) (*api.VM, error) {
 	cout := make(chan int)
 	next := make(chan bool)
 	vmc := make(chan *api.VM)
 
-	go pollVM(client, vmID, state, cout, next, vmc)
+	go pollVM(srv, vmID, state, cout, next, vmc)
 	for {
 		select {
 		case res := <-cout:
@@ -124,12 +169,12 @@ func pollVM(client api.ClientAPI, vmID string, state VMState.Enum, cout chan int
 }
 
 //WaitVolumeState waits a vm achieve state
-func WaitVolumeState(client api.ClientAPI, volumeID string, state VolumeState.Enum, timeout time.Duration) (*api.Volume, error) {
+func (srv *Service) WaitVolumeState(volumeID string, state VolumeState.Enum, timeout time.Duration) (*api.Volume, error) {
 	cout := make(chan int)
 	next := make(chan bool)
 	vc := make(chan *api.Volume)
 
-	go pollVolume(client, volumeID, state, cout, next, vc)
+	go pollVolume(srv, volumeID, state, cout, next, vc)
 	for {
 		select {
 		case res := <-cout:
@@ -172,55 +217,10 @@ func pollVolume(client api.ClientAPI, volumeID string, state VolumeState.Enum, c
 	}
 }
 
-//NetworkRequest defines a request to create a network
-type NetworkRequest struct {
-	Name string `json:"name,omitempty"`
-	//IPVersion must be IPv4 or IPv6 (see IPVersion)
-	IPVersion IPVersion.Enum `json:"ip_version,omitempty"`
-	//Mask mask in CIDR notation
-	Mask string `json:"mask,omitempty"`
-}
-
-//CreateNetwork create a network with a default subnet
-func CreateNetwork(client api.ClientAPI, request NetworkRequest) (*api.Network, error) {
-	n, err := client.CreateNetwork(request.Name)
-	if err != nil {
-		return nil, err
-	}
-	_, err = client.CreateSubnet(api.SubnetRequets{
-		Name:      n.Name,
-		NetworkID: n.ID,
-		IPVersion: request.IPVersion,
-		Mask:      request.Mask,
-	})
-	if err != nil {
-		defer client.DeleteNetwork(n.ID)
-		return nil, err
-	}
-	return n, nil
-}
-
-//DeleteNetwork delete a network and the subnet associated
-func DeleteNetwork(client api.ClientAPI, networkID string) error {
-	net, err := client.GetNetwork(networkID)
-	if err != nil {
-		return err
-	}
-	subnets, err := client.ListSubnets(networkID)
-	if err != nil {
-		return err
-	}
-	for _, sn := range subnets {
-		client.DeleteSubnet(sn.ID)
-	}
-
-	return client.DeleteNetwork(net.ID)
-}
-
 //SelectTemplatesBySize select templates satisfying sizing requirements
 //returned list is ordered by size fitting
-func SelectTemplatesBySize(client api.ClientAPI, sizing api.SizingRequirements) ([]api.VMTemplate, error) {
-	tpls, err := client.ListTemplates()
+func (srv *Service) SelectTemplatesBySize(sizing api.SizingRequirements) ([]api.VMTemplate, error) {
+	tpls, err := srv.ListTemplates()
 	var selectedTpls []api.VMTemplate
 	if err != nil {
 		return nil, err
@@ -236,8 +236,8 @@ func SelectTemplatesBySize(client api.ClientAPI, sizing api.SizingRequirements) 
 
 //SearchImage search an image corresponding to OS Name
 //use the Jaro Winkler algorithm to match os name and image name
-func SearchImage(client api.ClientAPI, osname string) (*api.Image, error) {
-	imgs, err := client.ListImages()
+func (srv *Service) SearchImage(osname string) (*api.Image, error) {
+	imgs, err := srv.ListImages()
 	if err != nil {
 		return nil, err
 	}
@@ -256,39 +256,87 @@ func SearchImage(client api.ClientAPI, osname string) (*api.Image, error) {
 	return &imgs[maxi], nil
 }
 
-//CreateServer creates a sever fitting request
-func CreateServer(client api.ClientAPI, request ServerRequest) (*ServerAccess, error) {
-	img, err := SearchImage(client, request.OSName)
+//GetNetworkByName returns the network named name
+func (srv *Service) GetNetworkByName(name string) (*api.Network, error) {
+	nets, err := srv.ListNetworksByName()
 	if err != nil {
 		return nil, err
 	}
-	kpName := uuid.NewV4().String()
-	kp, err := client.CreateKeyPair(kpName)
-	if err != nil {
-		return nil, fmt.Errorf("Error creating key pair")
+	n, ok := nets[name]
+	if !ok {
+		return nil, ResourceNotFoundError("Network", name)
 	}
-	defer client.DeleteKeyPair(kpName)
-	var netIds []string
-	for _, n := range request.Networks {
-		netIds = append(netIds, n.ID)
+	return &n, nil
 
+}
+
+//ListNetworksByName returns network list
+func (srv *Service) ListNetworksByName() (map[string]api.Network, error) {
+	nets, err := srv.ListNetworks()
+	if err != nil {
+		return nil, err
 	}
+	netMap := make(map[string]api.Network)
+	for _, n := range nets {
+		netMap[n.Name] = n
+	}
+	return netMap, nil
+
+}
+
+//CreateVMWithKeyPair creates a VM
+func (srv *Service) CreateVMWithKeyPair(request api.VMRequest) (*api.VM, *api.KeyPair, error) {
+	_, err := srv.GetVMByName(request.Name)
+	if err == nil {
+		return nil, nil, ResourceAlreadyExistsError("VM", request.Name)
+	}
+
+	//Create temporary key pair
+	kpName := uuid.NewV4().String()
+	kp, err := srv.CreateKeyPair(kpName)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer srv.DeleteKeyPair(kpName)
+
+	//Create VM
 	vmReq := api.VMRequest{
 		Name:       request.Name,
-		ImageID:    img.ID,
+		ImageID:    request.ImageID,
 		KeyPair:    kp,
 		PublicIP:   request.PublicIP,
-		NetworkIDs: netIds,
-		TemplateID: request.Template.ID,
+		NetworkIDs: request.NetworkIDs,
+		TemplateID: request.TemplateID,
 	}
-	vm, err := client.CreateVM(vmReq)
+	vm, err := srv.CreateVM(vmReq)
+	if err != nil {
+		return nil, nil, err
+	}
+	return vm, kp, nil
+}
+
+//ListVMsByName list VMs by name
+func (srv *Service) ListVMsByName() (map[string]api.VM, error) {
+	vms, err := srv.ListVMs()
 	if err != nil {
 		return nil, err
 	}
-	return &ServerAccess{
-		VM:      vm,
-		Key:     kp,
-		User:    api.DefaultUser,
-		Gateway: request.Gateway,
-	}, nil
+	vmMap := make(map[string]api.VM)
+	for _, vm := range vms {
+		vmMap[vm.Name] = vm
+	}
+	return vmMap, nil
+}
+
+//GetVMByName returns VM corresponding to name
+func (srv *Service) GetVMByName(name string) (*api.VM, error) {
+	vms, err := srv.ListVMsByName()
+	if err != nil {
+		return nil, err
+	}
+	vm, ok := vms[name]
+	if !ok {
+		return nil, ResourceNotFoundError("VM", name)
+	}
+	return &vm, nil
 }

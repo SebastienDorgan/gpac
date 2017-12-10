@@ -9,13 +9,13 @@ import (
 
 //EctdFactory is used to create etcd HA cluster
 type EctdFactory struct {
-	LeaderSSH  *system.SSHHelper
+	LeaderSSH  *system.SSHConfig
 	LeaderIP   string
 	scriptsBox *rice.Box
 }
 
 //Create an EctdFactory
-func Create(leaderSSH *system.SSHHelper, leaderIP string) (*EctdFactory, error) {
+func Create(leaderSSH *system.SSHConfig, leaderIP string) (*EctdFactory, error) {
 	box, err := rice.FindBox("scripts")
 	if err != nil {
 		return nil, err
@@ -33,11 +33,11 @@ func (leader *EctdFactory) Initialize() error {
 }
 
 //AddMaster add a master node to etcd cluster
-func (leader *EctdFactory) AddMaster(masterSSH *system.SSHHelper, masterIP string) error {
+func (leader *EctdFactory) AddMaster(masterSSH *system.SSHConfig, masterIP string) error {
 	return nil
 }
 
 //AddWorker add a work node to etcd cluster
-func (leader *EctdFactory) AddWorker(workerSSH *system.SSHHelper, masterIP string) error {
+func (leader *EctdFactory) AddWorker(workerSSH *system.SSHConfig, masterIP string) error {
 	return nil
 }

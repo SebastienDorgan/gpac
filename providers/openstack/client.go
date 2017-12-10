@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"text/template"
 
+	"github.com/rackspace/gophercloud/openstack/networking/v2/networks"
+
 	"github.com/GeertJohan/go.rice"
+	"github.com/SebastienDorgan/gpac/providers/api/VolumeSpeed"
 
 	gc "github.com/rackspace/gophercloud"
 	"github.com/rackspace/gophercloud/openstack"
@@ -63,28 +66,48 @@ type AuthOptions struct {
 	//Openstack region (data center) where the infrstructure will be created
 	Region string
 
-	//Name of the provider (external) network
-	ProviderNetwork string
-
-	//UseFloatingIP indicates if floating IP are used (optional)
-	UseFloatingIP bool
-
 	//FloatingIPPool name of the floating IP pool
 	//Necessary only if UseFloatingIP is true
 	FloatingIPPool string
 }
 
+//CfgOptions configuration options
+type CfgOptions struct {
+	//Name of the provider (external) network
+	ProviderNetwork string
+
+	//DNSList list of DNS
+	DNSList []string
+
+	//UseFloatingIP indicates if floating IP are used (optional)
+	UseFloatingIP bool
+
+	//UseLayer3Networking indicates if layer 3 networking features (router) can be used
+	//if UseFloatingIP is true UseLayer3Networking must be true
+	UseLayer3Networking bool
+
+	//AutoVMNetworkInterfaces indicates if network interfaces are configured automatically by the provider or needs a post configuration
+	AutoVMNetworkInterfaces bool
+
+	//VolumeSpeeds map volume types with volume speeds
+	VolumeSpeeds map[string]VolumeSpeed.Enum
+}
+
+//errorString creates an error string from openstack api error
 func errorString(err error) string {
 	switch e := err.(type) {
 	default:
 		return e.Error()
 	case *gc.UnexpectedResponseCodeError:
-		return string(e.Body[:])
+		return fmt.Sprintf("code : %d reason ; %s", e.Actual, string(e.Body[:]))
 	}
 }
 
+//NetworkGWContainer container where Gateway configuratiion are stored
+const NetworkGWContainer string = "__network_gws__"
+
 //AuthenticatedClient returns an authenticated client
-func AuthenticatedClient(opts AuthOptions) (*Client, error) {
+func AuthenticatedClient(opts AuthOptions, cfg CfgOptions) (*Client, error) {
 	gcOpts := gc.AuthOptions{
 		IdentityEndpoint: opts.IdentityEndpoint,
 		Username:         opts.Username,
@@ -102,7 +125,7 @@ func AuthenticatedClient(opts AuthOptions) (*Client, error) {
 	//Openstack client
 	pClient, err := openstack.AuthenticatedClient(gcOpts)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s", errorString(err))
 	}
 
 	//Compute API
@@ -111,7 +134,7 @@ func AuthenticatedClient(opts AuthOptions) (*Client, error) {
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s", errorString(err))
 	}
 
 	//Network API
@@ -119,15 +142,22 @@ func AuthenticatedClient(opts AuthOptions) (*Client, error) {
 		Region: opts.Region,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s", errorString(err))
 	}
-
+	nID, err := networks.IDFromName(network, cfg.ProviderNetwork)
+	if err != nil {
+		return nil, fmt.Errorf("%s", errorString(err))
+	}
 	//Storage API
 	blocstorage, err := openstack.NewBlockStorageV1(pClient, gc.EndpointOpts{
 		Region: opts.Region,
 	})
+
+	objectstorage, err := openstack.NewObjectStorageV1(pClient, gc.EndpointOpts{
+		Region: opts.Region,
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s", errorString(err))
 	}
 	box, err := rice.FindBox("scripts")
 	if err != nil {
@@ -142,19 +172,24 @@ func AuthenticatedClient(opts AuthOptions) (*Client, error) {
 		return nil, err
 	}
 	clt := Client{
-		Opts:        &opts,
-		pClient:     pClient,
-		nova:        compute,
-		neutron:     network,
-		blocstorage: blocstorage,
-		box:         box,
-		userDataTpl: tpl,
+		Opts:              &opts,
+		Cfg:               &cfg,
+		pClient:           pClient,
+		Compute:           compute,
+		Network:           network,
+		Volume:            blocstorage,
+		Container:         objectstorage,
+		ScriptBox:         box,
+		UserDataTpl:       tpl,
+		ProviderNetworkID: nID,
 	}
 
 	err = clt.initDefaultSecurityGroup()
 	if err != nil {
 		return nil, err
 	}
+	clt.CreateContainer("__network_gws__", nil)
+	clt.CreateContainer("__vms__", nil)
 	return &clt, nil
 }
 
@@ -164,21 +199,24 @@ const defaultSecurityGroup string = "30ad3142-a5ec-44b5-9560-618bde3de1ef"
 //Client is the implementation of the openstack driver regarding to the api.ClientAPI
 type Client struct {
 	Opts        *AuthOptions
+	Cfg         *CfgOptions
 	pClient     *gc.ProviderClient
-	nova        *gc.ServiceClient
-	neutron     *gc.ServiceClient
-	blocstorage *gc.ServiceClient
-	box         *rice.Box
-	userDataTpl *template.Template
+	Compute     *gc.ServiceClient
+	Network     *gc.ServiceClient
+	Volume      *gc.ServiceClient
+	Container   *gc.ServiceClient
+	ScriptBox   *rice.Box
+	UserDataTpl *template.Template
 
-	securityGroup *secgroups.SecurityGroup
+	SecurityGroup     *secgroups.SecurityGroup
+	ProviderNetworkID string
 }
 
 //getDefaultSecurityGroup returns the default security group
 func (client *Client) getDefaultSecurityGroup() (*secgroups.SecurityGroup, error) {
 	var sgList []secgroups.SecurityGroup
 
-	err := secgroups.List(client.nova).EachPage(func(page pagination.Page) (bool, error) {
+	err := secgroups.List(client.Compute).EachPage(func(page pagination.Page) (bool, error) {
 		list, err := secgroups.ExtractSecurityGroups(page)
 		if err != nil {
 			return false, err
@@ -211,7 +249,7 @@ func (client *Client) createTCPRules(groupID string) error {
 		CIDR:          "0.0.0.0/0",
 	}
 
-	_, err := secgroups.CreateRule(client.nova, ruleOpts).Extract()
+	_, err := secgroups.CreateRule(client.Compute, ruleOpts).Extract()
 	if err != nil {
 		return err
 	}
@@ -222,7 +260,7 @@ func (client *Client) createTCPRules(groupID string) error {
 		IPProtocol:    "TCP",
 		CIDR:          "::/0",
 	}
-	_, err = secgroups.CreateRule(client.nova, ruleOpts).Extract()
+	_, err = secgroups.CreateRule(client.Compute, ruleOpts).Extract()
 	return err
 }
 
@@ -237,7 +275,7 @@ func (client *Client) createUDPRules(groupID string) error {
 		CIDR:          "0.0.0.0/0",
 	}
 
-	_, err := secgroups.CreateRule(client.nova, ruleOpts).Extract()
+	_, err := secgroups.CreateRule(client.Compute, ruleOpts).Extract()
 	if err != nil {
 		return err
 	}
@@ -248,7 +286,7 @@ func (client *Client) createUDPRules(groupID string) error {
 		IPProtocol:    "UDP",
 		CIDR:          "::/0",
 	}
-	_, err = secgroups.CreateRule(client.nova, ruleOpts).Extract()
+	_, err = secgroups.CreateRule(client.Compute, ruleOpts).Extract()
 	return err
 }
 
@@ -263,7 +301,7 @@ func (client *Client) createICMPRules(groupID string) error {
 		CIDR:          "0.0.0.0/0",
 	}
 
-	_, err := secgroups.CreateRule(client.nova, ruleOpts).Extract()
+	_, err := secgroups.CreateRule(client.Compute, ruleOpts).Extract()
 	if err != nil {
 		return err
 	}
@@ -274,7 +312,7 @@ func (client *Client) createICMPRules(groupID string) error {
 		IPProtocol:    "ICMP",
 		CIDR:          "::/0",
 	}
-	_, err = secgroups.CreateRule(client.nova, ruleOpts).Extract()
+	_, err = secgroups.CreateRule(client.Compute, ruleOpts).Extract()
 	return err
 }
 
@@ -287,7 +325,7 @@ func (client *Client) initDefaultSecurityGroup() error {
 		return err
 	}
 	if sg != nil {
-		client.securityGroup = sg
+		client.SecurityGroup = sg
 		return nil
 	}
 	opts := secgroups.CreateOpts{
@@ -295,26 +333,26 @@ func (client *Client) initDefaultSecurityGroup() error {
 		Description: "Default security group",
 	}
 
-	group, err := secgroups.Create(client.nova, opts).Extract()
+	group, err := secgroups.Create(client.Compute, opts).Extract()
 	if err != nil {
 		return err
 	}
 	err = client.createTCPRules(group.ID)
 	if err != nil {
-		secgroups.Delete(client.nova, group.ID)
+		secgroups.Delete(client.Compute, group.ID)
 		return err
 	}
 
 	err = client.createUDPRules(group.ID)
 	if err != nil {
-		secgroups.Delete(client.nova, group.ID)
+		secgroups.Delete(client.Compute, group.ID)
 		return err
 	}
 	err = client.createICMPRules(group.ID)
 	if err != nil {
-		secgroups.Delete(client.nova, group.ID)
+		secgroups.Delete(client.Compute, group.ID)
 		return err
 	}
-	client.securityGroup = group
+	client.SecurityGroup = group
 	return nil
 }
