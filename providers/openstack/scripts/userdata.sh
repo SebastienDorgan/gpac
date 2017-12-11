@@ -18,24 +18,24 @@ do
    if [ $IF != "lo" ]
    then
         echo "auto ${IF}" >> /etc/network/interfaces.d/50-cloud-init.cfg
-        echo "iface ${IF} inet dhcp\n" >> /etc/network/interfaces.d/50-cloud-init.cfg
+        echo "iface ${IF} inet dhcp" >> /etc/network/interfaces.d/50-cloud-init.cfg
    fi
 done
 
-
+systemctl restart networking
 # Restart networkk interfaces except lo
-for IF in $(ls /sys/class/net)
-do
-    if [ $IF != "lo" ]
-    then
-        IF_UP = $(ip a |grep ${IF} | grep 'state UP' | wc -l)
-        if [ ${IF_UP} = "1" ]
-        then
-            ifconfig ${IF} down
-        fi
-        ifconfig ${IF} up
-    fi
-done
+# for IF in $(ls /sys/class/net)
+# do
+#     if [ $IF != "lo" ]
+#     then
+#         IF_UP = $(ip a |grep ${IF} | grep 'state UP' | wc -l)
+#         if [ ${IF_UP} = "1" ]
+#         then
+#             ifconfig ${IF} down
+#         fi
+#         ifconfig ${IF} up
+#     fi
+# done
 {{ end }}
 
 

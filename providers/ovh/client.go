@@ -56,6 +56,7 @@ func AuthenticatedClient(opts AuthOptions) (*Client, error) {
 			UseFloatingIP:           false,
 			UseLayer3Networking:     false,
 			AutoVMNetworkInterfaces: false,
+			DNSList:                 []string{"8.8.8.8", "8.8.4.4"},
 			VolumeSpeeds: map[string]VolumeSpeed.Enum{
 				"classic":    VolumeSpeed.COLD,
 				"high-speed": VolumeSpeed.HDD,
@@ -67,7 +68,6 @@ func AuthenticatedClient(opts AuthOptions) (*Client, error) {
 		return nil, err
 	}
 	client.Client = os
-	client.CreateContainer("__router__", nil)
 	return client, nil
 
 }

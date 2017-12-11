@@ -105,8 +105,8 @@ func (tester *ClientTester) ListKeyPairs(t *testing.T) {
 	}
 }
 
-//Networks test
-func (tester *ClientTester) Networks(t *testing.T) {
+//CreateNetwork creates a test network
+func (tester *ClientTester) CreateNetwork(t *testing.T, name string) *api.Network {
 	tpls, err := tester.Service.SelectTemplatesBySize(api.SizingRequirements{
 		MinCores:    1,
 		MinRAMSize:  4,
@@ -121,21 +121,91 @@ func (tester *ClientTester) Networks(t *testing.T) {
 		TemplateID: tpls[0].ID,
 	}
 	network, err := tester.Service.CreateNetwork(api.NetworkRequest{
-		Name:      "test_network",
+		Name:      name,
 		IPVersion: IPVersion.IPv4,
 		CIDR:      "192.168.1.0/24",
 		GWRequest: gwRequest,
 	})
 	assert.Nil(t, err)
-	//defer tester.Service.DeleteNetwork(network.ID)
+	return network
+}
+
+//CreateVM creates a test VM
+func (tester *ClientTester) CreateVM(t *testing.T, name string, networkID string) *api.VM {
+	tpls, err := tester.Service.SelectTemplatesBySize(api.SizingRequirements{
+		MinCores:    1,
+		MinRAMSize:  4,
+		MinDiskSize: 10,
+	})
 	assert.Nil(t, err)
-	vm, err := tester.Service.GetVM(network.GatewayID)
+	img, err := tester.Service.SearchImage("Ubuntu 16.04")
 	assert.Nil(t, err)
-	assert.True(t, len(vm.AccessIPv4) != 0 || len(vm.AccessIPv4) != 0)
+	vmRequest := api.VMRequest{
+		ImageID:    img.ID,
+		Name:       "test_gw",
+		TemplateID: tpls[0].ID,
+		NetworkIDs: []string{networkID},
+		PublicIP:   false,
+		IsGateway:  false,
+	}
+	vm, err := tester.Service.CreateVM(vmRequest)
+	assert.Nil(t, err)
+	return vm
+}
+
+//Networks test
+func (tester *ClientTester) Networks(t *testing.T) {
+	network1 := tester.CreateNetwork(t, "test_network_1")
+	vm, err := tester.Service.GetVM(network1.GatewayID)
+	assert.Nil(t, err)
+	assert.True(t, vm.AccessIPv4 != "" || vm.AccessIPv6 != "")
 	assert.NotEmpty(t, vm.PrivateKey)
 	assert.Empty(t, vm.GatewayID)
 	fmt.Println(vm.AccessIPv4)
 	fmt.Println(vm.PrivateKey)
+	ssh, err := tester.Service.GetSSHConfig(vm.ID)
+	assert.Nil(t, err)
+
+	//Waits sshd deamon is up
+	time.Sleep(30 * time.Second)
+	cmd, err := ssh.Command("whoami")
+	assert.Nil(t, err)
+	out, err := cmd.Output()
+	assert.Nil(t, err)
+	content := strings.Trim(string(out), "\n")
+	assert.Equal(t, api.DefaultUser, content)
+
+	network2 := tester.CreateNetwork(t, "test_network_2")
+
+	nets, err := tester.Service.ListNetworks()
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(nets))
+	found := 0
+	for _, n := range nets {
+		if n.ID == network1.ID {
+			found++
+		} else if n.ID == network2.ID {
+			found++
+		} else {
+			t.Fail()
+		}
+	}
+	assert.Equal(t, 2, found)
+
+	n1, err := tester.Service.GetNetwork(network1.ID)
+	assert.Nil(t, err)
+	assert.Equal(t, n1.CIDR, network1.CIDR)
+	assert.Equal(t, n1.GatewayID, network1.GatewayID)
+	assert.Equal(t, n1.ID, network1.ID)
+	assert.Equal(t, n1.IPVersion, network1.IPVersion)
+	assert.Equal(t, n1.Name, network1.Name)
+
+	//network := tester.CreateNetwork(t, "test_network_1")
+
+	err = tester.Service.DeleteNetwork(network1.ID)
+	assert.Nil(t, err)
+	err = tester.Service.DeleteNetwork(network2.ID)
+	assert.Nil(t, err)
 
 	// network, err := tester.Service.CreateNetwork("test_network")
 	// assert.Nil(t, err)
@@ -148,35 +218,26 @@ func (tester *ClientTester) Networks(t *testing.T) {
 	// assert.Empty(t, network2.Subnets)
 }
 
-//CreateVM test
-func (tester *ClientTester) CreateVM(t *testing.T) {
-	// kp, err := tester.Service.CreateKeyPair("kp")
-	// assert.Nil(t, err)
-	// defer tester.Service.DeleteKeyPair("kp")
-	// assert.Nil(t, err)
-	// network, err := tester.Service.CreateNetwork("test_network")
-	// assert.Nil(t, err)
-	// defer tester.Service.DeleteNetwork(network.ID)
-	// subnet, err := tester.Service.CreateSubnet(api.SubnetRequets{
-	// 	Name:      "test_subnet",
-	// 	NetworkID: network.ID,
-	// 	IPVersion: IPVersion.IPv4,
-	// 	Mask:      "192.168.1.0/24",
-	// })
-	// assert.Nil(t, err)
-	// assert.NotNil(t, subnet)
-	// defer tester.Service.DeleteSubnet(subnet.ID)
-	// images, err := tester.Service.ListImages()
-	// assert.Nil(t, err)
-	// var ubuntu *api.Image
-	// for _, img := range images {
-	// 	if img.Name == "Ubuntu 16.04" {
-	// 		ubuntu = &img
-	// 		break
-	// 	}
-	// }
-	// assert.NotNil(t, ubuntu)
+//VMs test
+func (tester *ClientTester) VMs(t *testing.T) {
+	network := tester.CreateNetwork(t, "test_network")
+	defer tester.Service.DeleteNetwork(network.ID)
+	vm := tester.CreateVM(t, "vm1", network.ID)
+	time.Sleep(30 * time.Second)
+	ssh, err := tester.Service.GetSSHConfig(vm.ID)
+	cmd, err := ssh.Command("whoami")
+	assert.Nil(t, err)
+	out, err := cmd.Output()
+	assert.Nil(t, err)
+	content := strings.Trim(string(out), "\n")
+	assert.Equal(t, api.DefaultUser, content)
 
+	cmd, err = ssh.Command("ping -c1 8.8.8.8")
+	assert.Nil(t, err)
+	err = cmd.Run()
+	assert.Nil(t, err)
+	tester.Service.DeleteVM(vm.ID)
+	//
 	// tpls, err := tester.Service.SelectTemplatesBySize(api.SizingRequirements{
 	// 	MinCores:    1,
 	// 	MinDiskSize: 1,

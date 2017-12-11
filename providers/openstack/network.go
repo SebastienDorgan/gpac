@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/SebastienDorgan/gpac/providers/api"
 	"github.com/SebastienDorgan/gpac/providers/api/IPVersion"
@@ -189,13 +190,13 @@ func (client *Client) DeleteNetwork(id string) error {
 		return fmt.Errorf("Error deleting network: %s", errorString(err))
 	}
 	client.DeleteVM(srv.ID)
-	client.removeGateway(srv.ID)
+	for err = nil; err != nil; _, err = client.GetVM(srv.ID) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	client.removeGateway(id)
 	sns, err := client.ListSubnets(id)
 	if err != nil {
 		return fmt.Errorf("Error deleting network: %s", errorString(err))
-	}
-	if len(sns) != 1 {
-		panic("Bad configuration, each network should have exactly one network")
 	}
 	for _, sn := range sns {
 		err := client.DeleteSubnet(sn.ID)
@@ -207,7 +208,6 @@ func (client *Client) DeleteNetwork(id string) error {
 	if err != nil {
 		return fmt.Errorf("Error deleting network: %s", errorString(err))
 	}
-
 	return nil
 }
 
@@ -330,23 +330,19 @@ func (client *Client) DeleteSubnet(id string) error {
 			break
 		}
 	}
-	var err error
 	if router != nil {
-		client.RemoveSubnetFromRouter(router.ID, id)
-		client.DeleteRouter(id)
+		if err := client.RemoveSubnetFromRouter(router.ID, id); err != nil {
+			return fmt.Errorf("Error deleting subnets: %s", errorString(err))
+		}
+		if err := client.DeleteRouter(router.ID); err != nil {
+			return fmt.Errorf("Error deleting subnets: %s", errorString(err))
+		}
 	}
 
-	err2 := subnets.Delete(client.Network, id).ExtractErr()
-	if err != nil && err2 != nil {
+	if err := subnets.Delete(client.Network, id).ExtractErr(); err != nil {
 		return fmt.Errorf("Error deleting subnets: %s", errorString(err))
-	}
-	if err2 != nil {
-		return fmt.Errorf("Error deleting subnets: %s", errorString(err2))
 	}
 
-	if err != nil && err2 != nil {
-		return fmt.Errorf("Error deleting subnets: %s", errorString(err))
-	}
 	return nil
 }
 

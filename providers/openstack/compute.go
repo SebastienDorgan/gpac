@@ -232,6 +232,7 @@ func (client *Client) toVMSize(flavor map[string]interface{}) api.VMSize {
 
 //toVMState converts VM status returned by OpenStack driver into VMState enum
 func toVMState(status string) VMState.Enum {
+	fmt.Println("VM status", status)
 	switch status {
 	case "BUILD", "build", "BUILDING", "building":
 		return VMState.STARTING
@@ -247,30 +248,46 @@ func toVMState(status string) VMState.Enum {
 }
 
 //convertAdresses converts adresses returned by the OpenStack driver arrange them by version in a map
-func (client *Client) convertAdresses(addresses map[string]interface{}) map[IPVersion.Enum][]string {
+func (client *Client) convertAdresses(addresses map[string]interface{}) (map[IPVersion.Enum][]string, string, string) {
 	addrs := make(map[IPVersion.Enum][]string)
+	var AcccessIPv4 string
+	var AcccessIPv6 string
 	for n, obj := range addresses {
-		if n == client.Cfg.ProviderNetwork {
-			break
-		}
+
 		for _, networkAddresses := range obj.([]interface{}) {
 			address := networkAddresses.(map[string]interface{})
 			version := address["version"].(float64)
 			fixedIP := address["addr"].(string)
-			switch version {
-			case 4:
-				addrs[IPVersion.IPv4] = append(addrs[IPVersion.IPv4], fixedIP)
-			case 6:
-				addrs[IPVersion.IPv6] = append(addrs[IPVersion.IPv4], fixedIP)
+			if n == client.Cfg.ProviderNetwork {
+				switch version {
+				case 4:
+					AcccessIPv4 = fixedIP
+				case 6:
+					AcccessIPv6 = fixedIP
+				}
+			} else {
+				switch version {
+				case 4:
+					addrs[IPVersion.IPv4] = append(addrs[IPVersion.IPv4], fixedIP)
+				case 6:
+					addrs[IPVersion.IPv6] = append(addrs[IPVersion.IPv4], fixedIP)
+				}
 			}
+
 		}
 	}
-	return addrs
+	return addrs, AcccessIPv4, AcccessIPv6
 }
 
 //toVM converts an OpenStack server into api VM
 func (client *Client) toVM(server *servers.Server) *api.VM {
-	adresses := client.convertAdresses(server.Addresses)
+	adresses, ipv4, ipv6 := client.convertAdresses(server.Addresses)
+	if ipv4 != "" {
+		server.AccessIPv4 = ipv4
+	}
+	if ipv6 != "" {
+		server.AccessIPv6 = ipv6
+	}
 
 	vm := api.VM{
 		ID:           server.ID,
@@ -469,7 +486,7 @@ func (client *Client) CreateVM(request api.VMRequest) (*api.VM, error) {
 	}
 	vm.GatewayID = gwID
 	vm.PrivateKey = kp.PrivateKey
-	//if Not use Floating IP or no public address requested
+	//if Floating IP are not used or no public address is requested
 	if !client.Cfg.UseFloatingIP || !request.PublicIP {
 		err = client.saveVMDefinition(*vm)
 		if err != nil {
@@ -600,6 +617,7 @@ func (client *Client) DeleteVM(id string) error {
 	if err != nil {
 		return fmt.Errorf("Error deleting VM %s : %s", id, errorString(err))
 	}
+	client.removeVMDefinition(id)
 	return nil
 }
 
@@ -625,11 +643,10 @@ func (client *Client) getSSHConfig(vm *api.VM) (*system.SSHConfig, error) {
 
 	ip := vm.GetAccessIP()
 	sshConfig := system.SSHConfig{
-		PrivateKey:         vm.PrivateKey,
-		Port:               22,
-		Host:               ip,
-		ConnecttionTimeout: 30 * time.Second,
-		User:               api.DefaultUser,
+		PrivateKey: vm.PrivateKey,
+		Port:       22,
+		Host:       ip,
+		User:       api.DefaultUser,
 	}
 	if vm.GatewayID != "" {
 		gw, err := client.GetVM(vm.GatewayID)
@@ -638,11 +655,10 @@ func (client *Client) getSSHConfig(vm *api.VM) (*system.SSHConfig, error) {
 		}
 		ip := gw.GetAccessIP()
 		GatewayConfig := system.SSHConfig{
-			PrivateKey:         gw.PrivateKey,
-			Port:               22,
-			ConnecttionTimeout: 30 * time.Second,
-			User:               api.DefaultUser,
-			Host:               ip,
+			PrivateKey: gw.PrivateKey,
+			Port:       22,
+			User:       api.DefaultUser,
+			Host:       ip,
 		}
 		sshConfig.GatewayConfig = &GatewayConfig
 	}
