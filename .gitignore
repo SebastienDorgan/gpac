@@ -17,3 +17,5 @@
 
 #remove client tests
 *_test.go
+#remove secrets
+*.secrets

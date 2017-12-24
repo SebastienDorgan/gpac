@@ -188,8 +188,8 @@ func AuthenticatedClient(opts AuthOptions, cfg CfgOptions) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	clt.CreateContainer("__network_gws__", nil)
-	clt.CreateContainer("__vms__", nil)
+	clt.CreateContainer("__network_gws__")
+	clt.CreateContainer("__vms__")
 	return &clt, nil
 }
 

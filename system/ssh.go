@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -294,15 +295,26 @@ func createSSHCmd(sshConfig *SSHConfig, cmdString string) (string, *os.File, err
 	//defer os.Remove(f.Name())
 	options := "-q -oLogLevel=error -oStrictHostKeyChecking=no -oUserKnownHostsFile=/dev/null -oPubkeyAuthentication=yes"
 
-	sshCmdString := fmt.Sprintf("ssh -i %s  %s@%s %s -p %d bash <<'ENDSSH'\n%s\nENDSSH",
+	if cmdString != "" {
+		sshCmdString := fmt.Sprintf("ssh -i %s  %s@%s %s -p %d bash <<'ENDSSH'\n%s\nENDSSH",
+			f.Name(),
+			sshConfig.User,
+			sshConfig.Host,
+			options,
+			sshConfig.Port,
+			cmdString,
+		)
+		return sshCmdString, f, nil
+	}
+	sshCmdString := fmt.Sprintf("ssh -i %s  %s@%s %s -p %d",
 		f.Name(),
 		sshConfig.User,
 		sshConfig.Host,
 		options,
 		sshConfig.Port,
-		cmdString,
 	)
 	return sshCmdString, f, nil
+
 }
 
 // Command returns the Cmd struct to execute cmdString remotely
@@ -324,6 +336,45 @@ func (ssh *SSHConfig) Command(cmdString string) (*SSHCommand, error) {
 	return &sshCommand, nil
 }
 
+//Exec executes the cmd using ssh
+func (ssh *SSHConfig) Exec(cmdString string) error {
+	tunnels, sshConfig, err := ssh.createTunnels()
+	if err != nil {
+		for _, t := range tunnels {
+			t.Close()
+		}
+		return fmt.Errorf("Unable to create command : %s", err.Error())
+	}
+	sshCmdString, keyFile, err := createSSHCmd(sshConfig, cmdString)
+	if err != nil {
+		for _, t := range tunnels {
+			t.Close()
+		}
+		if keyFile != nil {
+			os.Remove(keyFile.Name())
+		}
+		return fmt.Errorf("Unable to create command : %s", err.Error())
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		for _, t := range tunnels {
+			t.Close()
+		}
+		if keyFile != nil {
+			os.Remove(keyFile.Name())
+		}
+		return fmt.Errorf("Unable to create command : %s", err.Error())
+	}
+	var args []string
+	if cmdString == "" {
+		args = []string{sshCmdString}
+	} else {
+		args = []string{"-c", sshCmdString}
+	}
+	return syscall.Exec(bash, args, nil)
+
+}
+
 // CommandContext is like Command but includes a context.
 //
 // The provided context is used to kill the process (by calling
@@ -338,6 +389,7 @@ func (ssh *SSHConfig) CommandContext(ctx context.Context, cmdString string) (*SS
 	if err != nil {
 		return nil, fmt.Errorf("Unable to create command : %s", err.Error())
 	}
+
 	cmd := exec.CommandContext(ctx, "bash", "-c", sshCmdString)
 	sshCommand := SSHCommand{
 		cmd:     cmd,

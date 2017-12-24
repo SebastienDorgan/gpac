@@ -1,47 +1,15 @@
 #!/bin/bash
 
-adduser gpac -gecos "" --disabled-password
-echo "gpac ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+adduser {{.User}} -gecos "" --disabled-password
+echo "{{.User}} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-mkdir /home/gpac/.ssh
-echo "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" > /home/gpac/.ssh/authorized_keys
-
-echo "true"
-
-# Network interfaces configuration
-
-rm -f /etc/network/interfaces.d/50-cloud-init.cfg
-mkdir -p /etc/network/interfaces.d
-# Configure all network interfaces in dhcp
-for IF in $(ls /sys/class/net)
-do
-   if [ $IF != "lo" ]
-   then
-        echo "auto ${IF}" >> /etc/network/interfaces.d/50-cloud-init.cfg
-        echo "iface ${IF} inet dhcp\n" >> /etc/network/interfaces.d/50-cloud-init.cfg
-   fi
-done
-
-
-# Restart networkk interfaces except lo
-for IF in $(ls /sys/class/net)
-do
-    if [ $IF != "lo" ]
-    then
-        IF_UP = $(ip a |grep ${IF} | grep 'state UP' | wc -l)
-        if [ ${IF_UP} = "1" ]
-        then
-            ifconfig ${IF} down
-        fi
-        ifconfig ${IF} up
-    fi
-done
-
+mkdir /home/{{.User}}/.ssh
+echo "{{.Key}}" > /home/{{.User}}/.ssh/authorized_keys
 
 
 
 # Acitvates IP forwarding
-
+{{ if .IsGateway }}
 
 PUBLIC_IP=$(curl ipinfo.io/ip)
 PUBLIC_IF=$(netstat -ie | grep -B1 ${PUBLIC_IP} | head -n1 | awk '{print $1}')
@@ -92,10 +60,10 @@ systemctl enable routing
 systemctl start routing
 fi
 
-
+{{ end }}
 
 # Acitvates IP forwarding
-
+{{ if .AddGateway }}
 echo "AddGateway"
 
 GW=$(ip route show | grep default | cut -d ' ' -f3)
@@ -103,15 +71,13 @@ if [ -z $GW ]
 then
 
 cat <<-EOF > /etc/resolv.conf.gw
-dskjfdshjjkdhsksdhhkjs
-sfdsfsdq
-dfsqdfqsdfq
+{{.ResolveConf}}
 EOF
 
 cat <<- EOF > /sbin/gateway
 #!/bin/sh -
 echo "configure default gateway"
-/sbin/route add default gw 172.1.2.1
+/sbin/route add default gw {{.GatewayIP}}
 cp /etc/resolv.conf.gw /etc/resolv.conf
 EOF
 chmod u+x /sbin/gateway
@@ -130,3 +96,5 @@ systemctl enable gateway
 systemctl start gateway
 
 fi
+
+{{ end }}

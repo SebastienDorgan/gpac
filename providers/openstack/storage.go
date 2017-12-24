@@ -207,9 +207,9 @@ func (client *Client) DeleteVolumeAttachment(serverID, id string) error {
 }
 
 //CreateContainer creates an object container
-func (client *Client) CreateContainer(name string, meta map[string]string) error {
+func (client *Client) CreateContainer(name string) error {
 	opts := containers.CreateOpts{
-		Metadata: meta,
+	//		Metadata: meta,
 	}
 	_, err := containers.Create(client.Container, name, opts).Extract()
 	if err != nil {
@@ -278,7 +278,8 @@ func (client *Client) ListContainers() ([]string, error) {
 func (client *Client) PutObject(container string, obj api.Object) error {
 	var ti time.Time
 	opts := objects.CreateOpts{
-		Metadata: obj.Metadata,
+		Metadata:    obj.Metadata,
+		ContentType: obj.ContentType,
 	}
 	if ti != obj.DeleteAt {
 		opts.DeleteAt = int(obj.DeleteAt.Unix())

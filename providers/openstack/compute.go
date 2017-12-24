@@ -334,31 +334,33 @@ type userData struct {
 	GatewayIP string
 }
 
-func (client *Client) prepareUserData(request api.VMRequest, kp *api.KeyPair, gw *servers.Server) ([]byte, error) {
+func (client *Client) prepareUserData(request api.VMRequest, kp *api.KeyPair, gw *api.VM) ([]byte, error) {
 	dataBuffer := bytes.NewBufferString("")
-	var gwIP string
 	var ResolveConf string
 	var err error
 	if !request.PublicIP {
-		gwIP = gw.AccessIPv4
-		if gwIP == "" {
-			gwIP = gw.AccessIPv6
-		}
 		var buffer bytes.Buffer
 		for _, dns := range client.Cfg.DNSList {
 			buffer.WriteString(fmt.Sprintf("nameserver %s\n", dns))
 		}
 		ResolveConf = buffer.String()
 	}
-
+	ip := ""
+	if gw != nil {
+		if len(gw.PrivateIPsV4) > 0 {
+			ip = gw.PrivateIPsV4[0]
+		} else if len(gw.PrivateIPsV6) > 0 {
+			ip = gw.PrivateIPsV6[0]
+		}
+	}
 	data := userData{
 		User:        api.DefaultUser,
 		Key:         strings.Trim(kp.PublicKey, "\n"),
 		ConfIF:      !client.Cfg.AutoVMNetworkInterfaces,
 		IsGateway:   request.IsGateway && !client.Cfg.UseLayer3Networking,
-		AddGateway:  request.PublicIP && !client.Cfg.UseLayer3Networking,
+		AddGateway:  !request.PublicIP && !client.Cfg.UseLayer3Networking,
 		ResolveConf: ResolveConf,
-		GatewayIP:   gwIP,
+		GatewayIP:   ip,
 	}
 	err = client.UserDataTpl.Execute(dataBuffer, data)
 	if err != nil {
@@ -446,15 +448,19 @@ func (client *Client) CreateVM(request api.VMRequest) (*api.VM, error) {
 	if err != nil {
 		return nil, err
 	}
-	var gw *servers.Server
+	var gw *api.VM
 	if !request.PublicIP {
-		gw, err = client.readGateway(mainNetID)
+		gwServer, err := client.readGateway(mainNetID)
+		if err != nil {
+			return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
+		}
+		gw, err = client.readVMDefinition(gwServer.ID)
 		if err != nil {
 			return nil, fmt.Errorf("Error creating VM: %s", errorString(err))
 		}
 	}
 	userData, err := client.prepareUserData(request, kp, gw)
-
+	fmt.Println(string(userData))
 	//Create VM
 	srvOpts := servers.CreateOpts{
 		Name:           request.Name,

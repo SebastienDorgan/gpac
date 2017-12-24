@@ -244,6 +244,7 @@ func (client *Client) CreateSubnet(name string, networkID string, cidr string, i
 		IPVersion:  toGopherIPversion(ipVersion),
 		Name:       name,
 		EnableDHCP: &dhcp,
+		NoGateway:  !client.Cfg.UseLayer3Networking,
 	}
 
 	// Execute the operation and get back a subnets.Subnet struct

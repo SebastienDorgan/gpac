@@ -10,8 +10,6 @@ import (
 	"github.com/SebastienDorgan/gpac/providers/api/VMState"
 	"github.com/SebastienDorgan/gpac/providers/api/VolumeState"
 	uuid "github.com/satori/go.uuid"
-
-	"github.com/xrash/smetrics"
 )
 
 //ResourceError resource error
@@ -60,6 +58,13 @@ func (e ResourceAlreadyExists) Error() string {
 //Service Client High level service
 type Service struct {
 	api.ClientAPI
+}
+
+//FromClient contructs a Service instance from a ClientAPI
+func FromClient(clt api.ClientAPI) *Service {
+	return &Service{
+		ClientAPI: clt,
+	}
 }
 
 const (
@@ -234,23 +239,48 @@ func (srv *Service) SelectTemplatesBySize(sizing api.SizingRequirements) ([]api.
 	return selectedTpls, nil
 }
 
+func matchScore(fields []string, s2 string) float64 {
+	score := 0.0
+	index := 0
+	factor := 1.0
+	for _, field := range fields {
+		tmp := strings.Index(s2[index:], field)
+		if tmp >= 0 {
+			index = tmp
+			score = score + 1.0*factor
+		}
+		factor = factor / 10.0
+	}
+	return score
+}
+
 //SearchImage search an image corresponding to OS Name
 //use the Jaro Winkler algorithm to match os name and image name
 func (srv *Service) SearchImage(osname string) (*api.Image, error) {
+
 	imgs, err := srv.ListImages()
 	if err != nil {
 		return nil, err
 	}
 	maxscore := 0.0
-	maxi := 0
+	maxi := -1
+	fields := strings.Split(strings.ToUpper(osname), " ")
 	for i, img := range imgs {
-		score := smetrics.JaroWinkler(strings.ToUpper(img.Name), strings.ToUpper(osname), 0.7, 4)
+		//score := 1 / float64(smetrics.WagnerFischer(strings.ToUpper(img.Name), strings.ToUpper(osname), 1, 1, 2))
+		//score := smetrics.JaroWinkler(strings.ToUpper(img.Name), strings.ToUpper(osname), 0.7, 5)
+		score := matchScore(fields, strings.ToUpper(img.Name))
 		if score > maxscore {
 			maxscore = score
 			maxi = i
 		}
+		if score > 1 {
+			fmt.Println(img.Name, ">>", score)
+		}
+
 	}
-	if maxscore < 0.8 {
+	fmt.Println(fields, len(fields))
+	fmt.Println(len(fields))
+	if maxscore < 1 || maxi < 0 || len(imgs) == 0 {
 		return nil, fmt.Errorf("Unable to found and image matching %s", osname)
 	}
 	return &imgs[maxi], nil

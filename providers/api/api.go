@@ -306,15 +306,11 @@ type ClientAPI interface {
 	DeleteVolumeAttachment(serverID, id string) error
 
 	//CreateContainer creates an object container
-	CreateContainer(name string, meta map[string]string) error
+	CreateContainer(name string) error
 	//DeleteContainer deletes an object container
 	DeleteContainer(name string) error
-	//UpdateContainer updates an object container
-	UpdateContainer(name string, meta map[string]string) error
 	//ListContainers list object containers
 	ListContainers() ([]string, error)
-	//GetContainerMetadata get an object container metadata
-	GetContainerMetadata(name string) (map[string]string, error)
 
 	//PutObject put an object into an object container
 	PutObject(container string, obj Object) error
