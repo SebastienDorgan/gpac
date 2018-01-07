@@ -2,6 +2,10 @@ package system
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -12,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 //SSHConfig helper to manage ssh session
@@ -397,4 +403,25 @@ func (ssh *SSHConfig) CommandContext(ctx context.Context, cmdString string) (*SS
 		keyFile: keyFile,
 	}
 	return &sshCommand, nil
+}
+
+//CreateKeyPair creates a key pair
+func CreateKeyPair() (publicKeyBytes []byte, privateKeyBytes []byte, err error) {
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	publicKey := privateKey.PublicKey
+	pub, err := ssh.NewPublicKey(&publicKey)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	publicKeyBytes = ssh.MarshalAuthorizedKey(pub)
+
+	priBytes := x509.MarshalPKCS1PrivateKey(privateKey)
+	privateKeyBytes = pem.EncodeToMemory(
+		&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: priBytes,
+		},
+	)
+	return publicKeyBytes, privateKeyBytes, nil
 }

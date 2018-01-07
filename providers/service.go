@@ -157,7 +157,7 @@ func pollVM(client api.ClientAPI, vmID string, state VMState.Enum, cout chan int
 
 		vm, err := client.GetVM(vmID)
 		if err != nil {
-
+			fmt.Println(err)
 			cout <- 0
 			return
 		}

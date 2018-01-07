@@ -495,17 +495,25 @@ func (c *Client) ListTemplates() ([]api.VMTemplate, error) {
 
 //CreateKeyPair creates and import a key pair
 func (c *Client) CreateKeyPair(name string) (*api.KeyPair, error) {
-	out, err := c.EC2.CreateKeyPair(&ec2.CreateKeyPairInput{
-		KeyName: aws.String(name),
+	publicKey, privateKey, err := system.CreateKeyPair()
+	if err != nil {
+		return nil, err
+	}
+	c.EC2.ImportKeyPair(&ec2.ImportKeyPairInput{
+		KeyName:           aws.String(name),
+		PublicKeyMaterial: publicKey,
 	})
+	// out, err := c.EC2.CreateKeyPair(&ec2.CreateKeyPairInput{
+	// 	KeyName: aws.String(name),
+	// })
 	if err != nil {
 		return nil, err
 	}
 	return &api.KeyPair{
 		ID:         name,
 		Name:       name,
-		PrivateKey: pStr(out.KeyMaterial),
-		PublicKey:  pStr(out.KeyFingerprint),
+		PrivateKey: string(privateKey),
+		PublicKey:  string(publicKey),
 	}, nil
 }
 
@@ -777,6 +785,7 @@ func getState(state *ec2.InstanceState) (VMState.Enum, error) {
 	//    * 64 : stopping
 	//
 	//    * 80 : stopped
+	fmt.Println("State", state.Code)
 	if state == nil {
 		return VMState.ERROR, fmt.Errorf("Unexpected VM state")
 	}
@@ -884,6 +893,38 @@ func (c *Client) readVM(vmID string) (*api.VM, error) {
 		return nil, err
 	}
 	return &vm, nil
+}
+
+func (c *Client) createSecurityGroup(vpcID string, name string) (string, error) {
+	out, err := c.EC2.CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
+		GroupName: aws.String(name),
+		VpcId:     aws.String(vpcID),
+	})
+	if err != nil {
+		return "", err
+	}
+	_, err = c.EC2.AuthorizeSecurityGroupEgress(&ec2.AuthorizeSecurityGroupEgressInput{
+		IpPermissions: []*ec2.IpPermission{
+			&ec2.IpPermission{
+				IpProtocol: aws.String("-1"),
+			},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	_, err = c.EC2.AuthorizeSecurityGroupIngress(&ec2.AuthorizeSecurityGroupIngressInput{
+		IpPermissions: []*ec2.IpPermission{
+			&ec2.IpPermission{
+				IpProtocol: aws.String("-1"),
+			},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return *out.GroupId, nil
 }
 
 //CreateVM creates a VM that fulfils the request
@@ -1000,7 +1041,10 @@ func (c *Client) CreateVM(request api.VMRequest) (*api.VM, error) {
 	service := providers.Service{
 		ClientAPI: c,
 	}
-	vm, err := service.WaitVMState(*instance.InstanceId, VMState.STARTED, 120*time.Second)
+	_, err = service.WaitVMState(*instance.InstanceId, VMState.STARTED, 120*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	_, err = c.EC2.AssociateAddress(&ec2.AssociateAddressInput{
 		NetworkInterfaceId: netIFs.NetworkInterfaces[0].NetworkInterfaceId,
 		AllocationId:       addr.AllocationId,
@@ -1053,11 +1097,14 @@ func (c *Client) GetVM(id string) (*api.VM, error) {
 	if err != nil {
 		return nil, err
 	}
+	instance := out.Reservations[0].Instances[0]
 	vm, err := c.readVM(id)
 	if err != nil {
-		return nil, err
+		vm = &api.VM{
+			ID: *instance.InstanceId,
+		}
 	}
-	instance := out.Reservations[0].Instances[0]
+
 	vm.State, err = getState(instance.State)
 	if err != nil {
 		return nil, err
